@@ -36,8 +36,13 @@ including token validation against Vault when `validate_and_save=true`.
 revoke its peer's. The chart hardcodes `replicas: 1` with a
 [`Recreate` strategy](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)
 so the old pod revokes before the new one logs in. There is no HA mode and
-none is planned: the failure window is bounded by pod restart time, during
-which CP4D's existing token keeps working.
+none is planned: the failure window is bounded by pod restart time. Note
+what that window means: on an orderly rollout the outgoing pod revokes its
+token on SIGTERM, so CP4D holds a dead token until the incoming pod pushes
+a fresh one — revoke-on-shutdown deliberately trades a brief integration
+gap for never leaving an orphaned live token behind. Only on an unclean
+kill (SIGKILL, node loss) does the existing token keep working, until its
+TTL.
 
 ## How it works
 
@@ -244,7 +249,9 @@ Templates run with
 [`missingkey=error`](https://pkg.go.dev/text/template#Template.Option): a
 reference to anything that does not exist — a typo, an `extra` key that was
 never defined, a credential key absent from the file — fails the render,
-and the push with it. A failed initial push is a crash loop, so
+and the push with it. One caveat: the `index` builtin does not go through
+that check, so `{{ index .Extra "absent" }}` renders a zero value instead
+of failing — always use the dotted form (`{{ .Extra.key }}`), which does. A failed initial push is a crash loop, so
 misconfiguration is loud rather than silently pushing a payload with an
 empty token field. Execution errors are reduced to the error string before
 logging, so the data being rendered — the token — cannot leak into logs;
@@ -428,14 +435,18 @@ external-cluster variant below is make-free.
 
 The e2e suite creates a kind cluster, deploys a dev-mode Vault and the mock
 CP4D API ([test/mockcpd](test/mockcpd/)), installs the chart, and asserts
-with deliberately short TTLs (1m/2m): the token is pushed and valid, renewed
-in place past its initial TTL without a re-push, rotated at max TTL with the
-old token revoked after the grace period, recovered after an out-of-band
-revocation, and revoked when the Deployment is scaled down — across all
-three kubernetes-auth TokenReview models and the jwt method. With
-`VAULT_LICENSE` set, the dev Vault runs Vault Enterprise
-(`hashicorp/vault-enterprise:2.0-ent`) and a further spec proves the full
-lifecycle inside a Vault namespace; without a license that spec skips.
+with deliberately short TTLs (1m/2m). Coverage is not uniform across trust
+models, and precisely: the reviewer-JWT kubernetes model carries the full
+lifecycle assertions — token pushed and valid, renewed in place past its
+initial TTL without a re-push, rotated at max TTL with the old token
+revoked after the grace period, recovered after an out-of-band revocation,
+and revoked when the Deployment is scaled down. The other trust models
+(self-review, client-JWT, and the jwt method) assert login plus one valid
+push — they exercise the auth path, not the lifecycle, which is
+model-independent code. With `VAULT_LICENSE` set, the dev Vault runs Vault
+Enterprise (`hashicorp/vault-enterprise:2.0-ent`) and a further spec proves
+the full mint/renew/rotate/revoke lifecycle inside a Vault namespace;
+without a license that spec skips.
 
 The same suite can target an existing cluster (e.g. OpenShift) and an
 external Vault instead of provisioning KIND:

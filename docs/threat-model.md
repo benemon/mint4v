@@ -41,6 +41,14 @@ token and a CP4D credential, so it must be deployed carefully:
 * Run exactly one replica (the chart enforces this) and keep the pod spec the
   chart ships: non-root, read-only rootfs, no privilege escalation, default
   SA token mount disabled.
+* Consider a NetworkPolicy: mint4v needs egress to Vault and CP4D only, and
+  nothing needs ingress to it beyond the kubelet's probes. The chart does
+  not ship one because policy shape is cluster-specific.
+* Supply chain: no container images are published — you build from source
+  (`make docker-build` / `make ocp-build`), so image provenance is yours.
+  Released binaries carry SHA-256 checksums but are not signed and have no
+  SBOM; environments that require either should build from the tagged
+  source.
 
 ## Terminology
 
@@ -138,6 +146,8 @@ flowchart LR
   period. Failed pushes never leave the old token revoked prematurely.
 * CP4D's `validate_and_save=true` causes CP4D to verify each pushed token
   against Vault before accepting it, making a rogue or broken push visible.
+* The `/healthz` endpoint is unauthenticated by design (the kubelet probes
+  it); it exposes only a coarse status string, never token material.
 
 ## Threats
 

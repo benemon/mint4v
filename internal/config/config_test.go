@@ -112,6 +112,23 @@ func TestLoadRejectsMissingRequiredAttr(t *testing.T) {
 	}
 }
 
+// The reference configurations in examples/ are documentation, but they must
+// stay parseable against the real schema.
+func TestExamplesParse(t *testing.T) {
+	matches, err := filepath.Glob("../../examples/*.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("no examples found; did examples/ move?")
+	}
+	for _, example := range matches {
+		if _, err := Load(example); err != nil {
+			t.Errorf("%s does not parse: %v", example, err)
+		}
+	}
+}
+
 func writeConfig(t *testing.T, format string, args ...any) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.hcl")

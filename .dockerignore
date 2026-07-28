@@ -1,5 +1,6 @@
 bin/
 charts/
+examples/
 pdf/
 *.md
 cover.out

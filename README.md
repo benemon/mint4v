@@ -3,6 +3,10 @@
 
 # mint4v
 
+> **Community Project** — not affiliated with, maintained, or supported by
+> IBM or HashiCorp. Cloud Pak for Data and Vault are their products; mint4v
+> just talks to them.
+
 <img src="assets/logo.svg" alt="a hand-drawn mint with a hole in it" width="180" align="right"/>
 
 Token Minter for Vault. mint4v replaces the long-lived Vault token stored in
@@ -59,7 +63,8 @@ renewable
 ## Prerequisites
 
 - Go 1.26+ (development only)
-- Docker, kind, and Helm (e2e only)
+- Docker, kind, and Helm (e2e only); `oc` for the OpenShift in-cluster
+  build scenario
 - A Vault auth role (`kubernetes` or `jwt` method) bound to the minter's
   ServiceAccount
 - A CP4D user with vault-administration permission
@@ -158,6 +163,7 @@ One HCL file, passed as `-config /path/to/config.hcl`.
 | `address` | | Vault address (required) |
 | `namespace` | | [Vault Enterprise namespace](https://developer.hashicorp.com/vault/docs/enterprise/namespaces) |
 | `ca_cert_file` | | PEM bundle appended to the system pool for the Vault connection, mounted from a Secret (`vaultCASecret` in the chart) |
+| — | | mTLS client certificates for Vault listeners that require them are not first-class config; the client honours `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` env vars, but this path is untested |
 | `revoke_grace` | `30s` | How long the old token outlives its replacement after a rotation push |
 
 ### `vault.auth`
@@ -215,8 +221,12 @@ arrive in Kubernetes as mounted files.
 
 ## Cloud Pak for Data integration
 
-Verified against the CP4D 5.x Platform API. A `hashicorp_token` vault
-integration is updated with:
+Built against the CP4D 5.x Platform API documentation and exercised
+end-to-end against a mock that implements the documented contract
+(including token validation on `validate_and_save=true`). Validation
+against a live CP4D instance is still outstanding — the payload template
+and URN are config-only changes if the real thing diverges. A
+`hashicorp_token` vault integration is updated with:
 
 ```
 PATCH https://<cpd-host>/zen-data/v2/vaults/<vault_urn>?validate_and_save=true
@@ -265,6 +275,14 @@ The credential is read at startup, so a rotated Secret takes effect on the
 next pod restart.
 
 ## Vault setup
+
+### Version compatibility
+
+| Tier | Versions | Evidence |
+|------|----------|----------|
+| Tested | Vault OSS 1.18 | full KIND e2e suite in CI |
+| Tested | Vault Enterprise 2.0.x | namespace lifecycle spec in CI (`vault-enterprise:2.0-ent`); full external suite against a live Enterprise 2.0.3 cluster |
+| Expected to work | any Vault serving the `kubernetes`/`jwt` auth APIs | the client surface is two login fields plus token renew/revoke, stable across supported Vault versions |
 
 The auth role must issue renewable
 [service tokens](https://developer.hashicorp.com/vault/docs/concepts/tokens#service-tokens);

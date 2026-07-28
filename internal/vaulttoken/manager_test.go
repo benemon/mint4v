@@ -334,9 +334,9 @@ func TestReplacementWatchedDuringGrace(t *testing.T) {
 }
 
 // runAgainstCannedLogin runs a jwt-auth manager against a server that always
-// answers login with the given body, returning Run's error and the tokens
-// the manager revoked.
-func runAgainstCannedLogin(t *testing.T, loginBody string) (error, []string) {
+// answers login with the given body, returning the tokens the manager
+// revoked and Run's error.
+func runAgainstCannedLogin(t *testing.T, loginBody string) ([]string, error) {
 	t.Helper()
 	var mu sync.Mutex
 	var revoked []string
@@ -367,13 +367,13 @@ func runAgainstCannedLogin(t *testing.T, loginBody string) (error, []string) {
 	err = m.Run(context.Background())
 	mu.Lock()
 	defer mu.Unlock()
-	return err, append([]string(nil), revoked...)
+	return append([]string(nil), revoked...), err
 }
 
 // A non-renewable token must be rejected AND revoked: Vault already issued
 // it, so returning without cleanup would orphan one token per retry.
 func TestLoginRejectsNonRenewableToken(t *testing.T) {
-	err, revoked := runAgainstCannedLogin(t,
+	revoked, err := runAgainstCannedLogin(t,
 		`{"auth":{"client_token":"b.batch","accessor":"acc","renewable":false,"lease_duration":60}}`)
 	if err == nil || !strings.Contains(err.Error(), "non-renewable") {
 		t.Fatalf("want non-renewable token error, got %v", err)
@@ -391,7 +391,7 @@ func TestLoginRejectsAuthlessResponse(t *testing.T) {
 		`{"auth":null}`,
 		`{"auth":{"client_token":"","accessor":"acc","renewable":true,"lease_duration":60}}`,
 	} {
-		err, _ := runAgainstCannedLogin(t, body)
+		_, err := runAgainstCannedLogin(t, body)
 		if err == nil || !strings.Contains(err.Error(), "no auth data") {
 			t.Errorf("login body %s: want no-auth-data error, got %v", body, err)
 		}

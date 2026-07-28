@@ -204,15 +204,73 @@ would omit both.)
 | `token_field` | | Dot-path to the bearer token in the JSON response (`token` for CP4D) |
 | `credentials_file` | | JSON object mounted from a Secret, exposed as `{{ .Credentials.* }}` |
 
-### Template variables
+### Templating
 
-Templates are inline Go [`text/template`](https://pkg.go.dev/text/template)
-strings. Payload template: `{{ .VaultToken }}`, `{{ .Accessor }}`,
-`{{ .TTLSeconds }}`, `{{ .Extra.* }}`. Login template:
-`{{ .Credentials.* }}`. There is no syntax collision — Go templates
-interpolate with `{{ }}`, HCL with `${ }`; a literal `${` in a payload must
-be written `$${`. Templates run with `missingkey=error`; execution errors
-are logged without the data being rendered.
+Two inline Go [`text/template`](https://pkg.go.dev/text/template) strings
+drive everything mint4v sends. `push.body_template` renders the payload for
+every push — the initial one and each rotation. `push.login.body_template`,
+when the `login` block is present, renders the pre-login body immediately
+before each push. Both are parsed once at startup, so a syntax error fails
+the process before it ever touches Vault; rendering happens per request.
+
+#### Variables
+
+Payload template:
+
+| Variable | Type | Value |
+|----------|------|-------|
+| `{{ .VaultToken }}` | string | the minted Vault service token — the secret being delivered |
+| `{{ .Accessor }}` | string | the token's accessor: safe to log or store, usable by a Vault administrator for lookup and revocation but never for authentication |
+| `{{ .TTLSeconds }}` | int | the token's TTL at mint time — a number, so leave it unquoted in JSON |
+| `{{ .Extra.<key> }}` | string | static values from `push.extra`, for anything the target wants alongside the token (the vault address, an integration id) |
+
+Login template:
+
+| Variable | Type | Value |
+|----------|------|-------|
+| `{{ .Credentials.<key> }}` | string | keys of the flat JSON object read from `credentials_file` at startup |
+
+The data model is deliberately this small: no custom functions, no Sprig,
+no file access, no way to reach anything not listed. A template controls
+the shape of one HTTP body, nothing more — if the target needs another
+value, add it to `push.extra`; if it needs computation, do it before it
+reaches the config.
+
+#### Failure semantics
+
+Templates run with
+[`missingkey=error`](https://pkg.go.dev/text/template#Template.Option): a
+reference to anything that does not exist — a typo, an `extra` key that was
+never defined, a credential key absent from the file — fails the render,
+and the push with it. A failed initial push is a crash loop, so
+misconfiguration is loud rather than silently pushing a payload with an
+empty token field. Execution errors are reduced to the error string before
+logging, so the data being rendered — the token — cannot leak into logs;
+a unit test pins this.
+
+#### Escaping
+
+Two layers wrap a template, each with exactly one rule:
+
+- **HCL heredocs.** `<<-EOT` strips leading indentation to the
+  least-indented line. HCL's own interpolation sequences are `${` and
+  `%{` — a literal `${` in a payload must be written `$${`, a literal
+  `%{` as `%%{`. Go's `{{ }}` means nothing to HCL and passes through
+  untouched, so the two template languages cannot collide.
+- **JSON.** Rendered values are substituted verbatim, not JSON-escaped.
+  Vault tokens and accessors are JSON-safe by construction (alphanumerics
+  and dots), so `"{{ .VaultToken }}"` inside quotes is always correct. For
+  `Extra` or `Credentials` values that might contain quotes or
+  backslashes, render with `printf "%q"`, which emits a quoted, escaped
+  JSON string:
+
+  ```
+  {"note":{{ printf "%q" .Extra.note }},"access_token":"{{ .VaultToken }}"}
+  ```
+
+The [examples](examples/) directory carries complete rendered-in-anger
+profiles; the CP4D payload is dissected under
+[Cloud Pak for Data integration](#cloud-pak-for-data-integration).
 
 Secrets, CA bundles, and the ServiceAccount token deliberately stay file
 references rather than inlining: the config lives in a ConfigMap, so

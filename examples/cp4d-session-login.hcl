@@ -36,7 +36,7 @@ push {
     token_field = "token"
 
     body_template = <<-EOT
-      {"username":"{{ .Credentials.username }}","api_key":"{{ .Credentials.api_key }}"}
+      {"username":{{ toJSON .Credentials.username }},"api_key":{{ toJSON .Credentials.api_key }}}
     EOT
 
     credentials_file = "/etc/minter/credentials/credentials.json"

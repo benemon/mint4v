@@ -162,8 +162,8 @@ One HCL file, passed as `-config /path/to/config.hcl`.
 |-------|---------|-------------|
 | `address` | | Vault address (required) |
 | `namespace` | | [Vault Enterprise namespace](https://developer.hashicorp.com/vault/docs/enterprise/namespaces) |
-| `ca_cert_file` | | PEM bundle appended to the system pool for the Vault connection, mounted from a Secret (`vaultCASecret` in the chart) |
-| — | | mTLS client certificates for Vault listeners that require them are not first-class config; the client honours `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` env vars, but this path is untested |
+| `ca_cert_file` | | PEM bundle that **replaces** the trust pool for the Vault connection (a true pin — only this CA validates Vault), mounted from a Secret (`vaultCASecret` in the chart) |
+| — | | mTLS client certificates for Vault listeners that require them are not first-class config; the client honours `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` env vars, but this path is untested. All other `VAULT_*` environment variables are ignored: the config file is authoritative, so `VAULT_ADDR`, `VAULT_AGENT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`, `VAULT_SKIP_VERIFY`, and `VAULT_TLS_SERVER_NAME` cannot reroute or weaken the connection |
 | `revoke_grace` | `30s` | How long the old token outlives its replacement after a rotation push |
 
 ### `vault.auth`
@@ -230,11 +230,12 @@ Login template:
 |----------|------|-------|
 | `{{ .Credentials.<key> }}` | string | keys of the flat JSON object read from `credentials_file` at startup |
 
-The data model is deliberately this small: no custom functions, no Sprig,
-no file access, no way to reach anything not listed. A template controls
-the shape of one HTTP body, nothing more — if the target needs another
-value, add it to `push.extra`; if it needs computation, do it before it
-reaches the config.
+The data model is deliberately this small: one custom function (`toJSON`,
+which emits a value as a JSON literal — see [Escaping](#escaping)), no
+Sprig, no file access, no way to reach anything not listed. A template
+controls the shape of one HTTP body, nothing more — if the target needs
+another value, add it to `push.extra`; if it needs computation, do it
+before it reaches the config.
 
 #### Failure semantics
 
@@ -261,12 +262,15 @@ Two layers wrap a template, each with exactly one rule:
   Vault tokens and accessors are JSON-safe by construction (alphanumerics
   and dots), so `"{{ .VaultToken }}"` inside quotes is always correct. For
   `Extra` or `Credentials` values that might contain quotes or
-  backslashes, render with `printf "%q"`, which emits a quoted, escaped
-  JSON string:
+  backslashes, render with the `toJSON` template function, which emits the
+  value as a JSON literal, quotes included:
 
   ```
-  {"note":{{ printf "%q" .Extra.note }},"access_token":"{{ .VaultToken }}"}
+  {"note":{{ toJSON .Extra.note }},"access_token":"{{ .VaultToken }}"}
   ```
+
+  (Do not reach for `printf "%q"` — that is Go quoting, not JSON, and the
+  two diverge on some control and non-ASCII characters.)
 
 The [examples](examples/) directory carries complete rendered-in-anger
 profiles; the CP4D payload is dissected under

@@ -21,7 +21,10 @@ import (
 	"mint4v/internal/config"
 )
 
-const maxErrorBodyBytes = 256
+const (
+	maxErrorBodyBytes     = 256
+	maxLoginResponseBytes = 1 << 20
+)
 
 type pushData struct {
 	VaultToken string
@@ -93,7 +96,13 @@ func New(cfg config.Push, logger *slog.Logger) (*Pusher, error) {
 		if !pool.AppendCertsFromPEM(pem) {
 			return nil, fmt.Errorf("push.ca_cert_file: no certificates found in %s", cfg.CACertFile)
 		}
-		p.client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
+		// Clone the default transport rather than replacing it: a bare
+		// &http.Transport{} would silently drop ProxyFromEnvironment and the
+		// standard timeouts, making proxy behaviour depend on whether a CA is
+		// configured.
+		tp := http.DefaultTransport.(*http.Transport).Clone()
+		tp.TLSClientConfig = &tls.Config{RootCAs: pool}
+		p.client.Transport = tp
 	}
 
 	return p, nil
@@ -166,9 +175,16 @@ func (p *Pusher) preLogin(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("login returned %s: %s", resp.Status, describeErrorBody(resp))
 	}
 
+	// The response size is capped (the client timeout bounds time, not bytes)
+	// and must be exactly one JSON object — trailing data means the body is
+	// not what the token-field lookup thinks it is.
+	dec := json.NewDecoder(io.LimitReader(resp.Body, maxLoginResponseBytes))
 	var parsed map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := dec.Decode(&parsed); err != nil {
 		return "", fmt.Errorf("parsing login response: %w", err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return "", fmt.Errorf("login response has data after the JSON object")
 	}
 	bearer, err := lookupField(parsed, p.cfg.Login.TokenField)
 	if err != nil {
@@ -196,11 +212,25 @@ func lookupField(obj map[string]any, path string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("login response field %q is not a string", path)
 	}
+	if s == "" {
+		// An empty bearer would produce a push with no authentication at all.
+		return "", fmt.Errorf("login response field %q is empty", path)
+	}
 	return s, nil
 }
 
 func parseTemplate(name, text string) (*template.Template, error) {
-	tmpl, err := template.New(name).Option("missingkey=error").Parse(text)
+	// toJSON emits a value as a JSON literal, quotes included — the correct
+	// way to substitute Extra or Credentials values that may contain quotes
+	// or backslashes. printf "%q" is Go quoting, not JSON, and diverges on
+	// some control and non-ASCII characters.
+	funcs := template.FuncMap{
+		"toJSON": func(v any) (string, error) {
+			b, err := json.Marshal(v)
+			return string(b), err
+		},
+	}
+	tmpl, err := template.New(name).Funcs(funcs).Option("missingkey=error").Parse(text)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}

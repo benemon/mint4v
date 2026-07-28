@@ -331,13 +331,14 @@ func TestReplacementWatchedDuringGrace(t *testing.T) {
 	<-done
 }
 
-func TestLoginRejectsNonRenewableToken(t *testing.T) {
+// runAgainstCannedLogin runs a jwt-auth manager against a server that always
+// answers login with the given body, returning Run's error.
+func runAgainstCannedLogin(t *testing.T, loginBody string) error {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"auth": map[string]any{"client_token": "b.batch", "accessor": "acc", "renewable": false, "lease_duration": 60},
-		})
+		fmt.Fprint(w, loginBody)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	vc := api.DefaultConfig()
 	vc.Address = srv.URL
@@ -351,9 +352,29 @@ func TestLoginRejectsNonRenewableToken(t *testing.T) {
 	}
 	m := NewManager(client, config.Auth{Method: "jwt", MountPath: "jwt", Role: "r", TokenFile: tokenFile},
 		time.Second, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return m.Run(context.Background())
+}
 
-	if err := m.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "non-renewable") {
+func TestLoginRejectsNonRenewableToken(t *testing.T) {
+	err := runAgainstCannedLogin(t,
+		`{"auth":{"client_token":"b.batch","accessor":"acc","renewable":false,"lease_duration":60}}`)
+	if err == nil || !strings.Contains(err.Error(), "non-renewable") {
 		t.Fatalf("want non-renewable token error, got %v", err)
+	}
+}
+
+// A proxy or malformed endpoint answering 200 with no auth block must produce
+// an error, not a nil-dereference panic in the jwt SetToken path.
+func TestLoginRejectsAuthlessResponse(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"auth":null}`,
+		`{"auth":{"client_token":"","accessor":"acc","renewable":true,"lease_duration":60}}`,
+	} {
+		err := runAgainstCannedLogin(t, body)
+		if err == nil || !strings.Contains(err.Error(), "no auth data") {
+			t.Errorf("login body %s: want no-auth-data error, got %v", body, err)
+		}
 	}
 }
 

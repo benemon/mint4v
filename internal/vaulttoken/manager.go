@@ -184,15 +184,17 @@ func (m *Manager) login(ctx context.Context) (*api.Secret, error) {
 			"role": m.auth.Role,
 			"jwt":  string(jwt),
 		})
-		if err == nil {
-			m.client.SetToken(secret.Auth.ClientToken)
-		}
 	}
 	if err != nil {
 		return nil, err
 	}
-	if secret == nil || secret.Auth == nil {
+	if secret == nil || secret.Auth == nil || secret.Auth.ClientToken == "" {
 		return nil, fmt.Errorf("login returned no auth data")
+	}
+	if m.auth.Method == "jwt" {
+		// The kubernetes auth helper sets the client token itself; the raw
+		// logical write does not.
+		m.client.SetToken(secret.Auth.ClientToken)
 	}
 	if !secret.Auth.Renewable {
 		return nil, fmt.Errorf("vault returned a non-renewable token; " +

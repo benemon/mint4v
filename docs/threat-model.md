@@ -28,8 +28,10 @@ token and a CP4D credential, so it must be deployed carefully:
 * Prefer the audience-bound projected ServiceAccount token (the chart
   default) over long-lived legacy Secret tokens; prefer the reviewer-JWT
   TokenReview model over granting `system:auth-delegator` to workload SAs.
-* Use TLS with pinned CA bundles for both Vault and CP4D. The Vault token
-  transits the CP4D connection in the request body on every push.
+* Use TLS with custom CA bundles for both Vault and CP4D (the Vault CA is a
+  true pin — it replaces the trust pool — while the CP4D CA is added to the
+  system roots; see threat 2). The Vault token transits the CP4D connection
+  in the request body on every push.
 * Source the CP4D credential from Vault via the Vault Secrets Operator (see
   below) rather than hand-managed Secrets, and scope that CP4D user to vault
   administration only.
@@ -175,7 +177,7 @@ it:
 | ID | Threat | Categories | Description | Mitigation |
 |----|--------|------------|-------------|------------|
 | 1 | An attacker snoops on or tampers with traffic between mint4v and Vault | Information disclosure, tampering, spoofing | Login requests carry the SA token; responses carry the minted token. The route may cross namespaces or leave the cluster. | TLS with a pinned CA (`vault.ca_cert_file`); never expose Vault over plaintext outside dev. |
-| 2 | An attacker snoops on traffic between mint4v and CP4D | Information disclosure, spoofing | Every push carries the minted token in the request body, and the pre-login carries the CP4D credential. CP4D may sit outside the cluster. | TLS with a pinned CA (`push.ca_cert_file`); the separate CA pool prevents a compromised Vault CA from validating the CP4D route or vice versa. |
+| 2 | An attacker snoops on traffic between mint4v and CP4D | Information disclosure, spoofing | Every push carries the minted token in the request body, and the pre-login carries the CP4D credential. CP4D may sit outside the cluster. | TLS with a custom CA (`push.ca_cert_file`). Note the asymmetry with Vault: the Vault CA **replaces** the trust pool (a true pin), while the push CA is **added to** the system roots — a certificate from any publicly-trusted CA still validates the CP4D route. The separate pools prevent a compromised Vault CA from validating the CP4D route or vice versa. |
 | 3 | Compromise of the mint4v pod | Elevation of privilege, information disclosure | An attacker in the pod can read the minted token from memory, use the SA token to mint more tokens, and read the CP4D credential. | Restricted pod profile (non-root, read-only rootfs, no shell in ubi-micro, `restricted-v2` compatible); narrow Vault policy bounds what any minted token can do; short TTLs bound duration; audience-bound short-expiry projected tokens limit SA token reuse; Vault audit log attributes all mints to this SA. |
 | 4 | Token leak via logs or error messages | Information disclosure | Failure paths (template errors, HTTP errors) can embed the data being processed — a target error body may even echo the submitted payload. | mint4v never logs the token: accessor-only logging, template errors are reduced to the error string, error response bodies are withheld entirely (only status, content type, and length are reported). Covered by unit tests `TestPushErrorNeverContainsToken` and `TestLoginErrorNeverContainsCredentials`, which assert against reflective error bodies. |
 | 5 | Orphaned live token after a crash | Information disclosure | If mint4v dies without revoking (SIGKILL, node loss), the current token stays valid until its TTL. | Keep `token_ttl` short; a crashed or wedged process fails `/livez` and is restarted, minting fresh and re-pushing; monitor Vault audit logs for tokens that stop renewing. |

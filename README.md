@@ -183,16 +183,17 @@ One HCL file, passed as `-config /path/to/config.hcl`.
 | `method` | `POST` | HTTP method. CP4D vault updates use `PATCH` |
 | `ca_cert_file` | | PEM bundle for the target connection, mounted from a Secret (`targetCASecret` in the chart). Deliberately a separate pool from the Vault CA |
 | `body_template` | | Inline payload template, usually an [HCL heredoc](https://developer.hashicorp.com/terraform/language/expressions/strings#heredoc-strings) (required) |
-| `headers` | | Static request headers |
+| `credentials_file` | | JSON object mounted from a Secret, exposed to header templates as `{{ .Credentials.* }}`. Mutually exclusive with `push.login.credentials_file` (one file feeds both) |
+| `headers` | | Request headers. Values are templates rendered once at startup with `{{ .Credentials.* }}`, so a secret-bearing header (e.g. a ZenApiKey) is sourced from the credentials Secret, never inlined in the ConfigMap-resident config |
 | `extra` | | Static key/values exposed to the payload template as `{{ .Extra.* }}` |
 
 ### `push.login` (optional block)
 
 CP4D always authenticates — this block is one of the two ways to satisfy
 it. Include it for the Bearer session exchange against
-`/icp4d-api/v1/authorize`; omit it and put a static
-`Authorization = "ZenApiKey <base64 of username:apikey>"` in `push.headers`
-instead. See
+`/icp4d-api/v1/authorize`; omit it and template the ZenApiKey into
+`push.headers` from `push.credentials_file` (e.g.
+`Authorization = "ZenApiKey {{ .Credentials.zen_api_key }}"`) instead. See
 [Cloud Pak for Data integration](#cloud-pak-for-data-integration) for the
 trade-off. (Only a non-CP4D target with genuinely unauthenticated writes
 would omit both.)
@@ -317,8 +318,12 @@ push {
 
 CP4D accepts two authentication styles, both supported:
 
-- **ZenApiKey** (static): omit the `login` block; add
-  `Authorization = "ZenApiKey <base64 of username:apikey>"` to `push.headers`.
+- **ZenApiKey** (static): omit the `login` block; store
+  `{"zen_api_key": "<base64 of username:apikey>"}` in the credentials Secret,
+  point `push.credentials_file` at it, and set
+  `Authorization = "ZenApiKey {{ .Credentials.zen_api_key }}"` in
+  `push.headers`. The key stays in Secret custody — never put the literal
+  value in `push.headers`, which lands in a ConfigMap.
 - **Bearer session token**: point the `login` block at
   `/icp4d-api/v1/authorize` with `token_field = "token"`. The exchange runs
   before each push; pushes happen once per rotation, so session-token expiry

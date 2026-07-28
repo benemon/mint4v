@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -138,6 +139,19 @@ func tokenLookup(token string) (string, error) {
 	return path, nil
 }
 
+// tokenRevoked reports whether Vault positively states the token is invalid.
+// A transport failure or server error is NOT proof of revocation — only a
+// 400/403 lookup response (Vault's bad-token answers) counts.
+func tokenRevoked(token string) bool {
+	_, err := activeVaultClient.Logical().Write("auth/token/lookup", map[string]any{"token": token})
+	if err == nil {
+		return false
+	}
+	var respErr *api.ResponseError
+	return errors.As(err, &respErr) &&
+		(respErr.StatusCode == http.StatusBadRequest || respErr.StatusCode == http.StatusForbidden)
+}
+
 // clusterCA returns the CA bundle that validates the API server endpoint
 // Vault will call for TokenReview.
 func clusterCA() string {
@@ -194,10 +208,14 @@ func clusterJWKSPubkeys() []string {
 	return pems
 }
 
+// mockClient polls mockcpd with an explicit timeout: a stalled port-forward
+// must fail the poll, not block until the suite deadline.
+var mockClient = &http.Client{Timeout: 10 * time.Second}
+
 // lastPushedToken returns the Vault token most recently accepted by mockcpd,
 // via the port-forward established in BeforeAll.
 func lastPushedToken() (string, error) {
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/last", mockLocalPort))
+	resp, err := mockClient.Get(fmt.Sprintf("http://127.0.0.1:%d/last", mockLocalPort))
 	if err != nil {
 		return "", err
 	}
@@ -350,8 +368,11 @@ var _ = Describe("mint4v", Ordered, func() {
 			licenseEnv := ""
 			if vaultLicense != "" {
 				vaultImage = "hashicorp/vault-enterprise:2.0-ent"
+				// The license arrives via stdin so it never appears in a
+				// logged command line or the host process table.
 				cmd := exec.Command("kubectl", "create", "secret", "generic", "vault-license",
-					"-n", namespace, "--from-literal=license="+vaultLicense)
+					"-n", namespace, "--from-file=license=/dev/stdin")
+				cmd.Stdin = strings.NewReader(vaultLicense)
 				if _, err := utils.Run(cmd); err != nil && !strings.Contains(err.Error(), "AlreadyExists") {
 					Expect(err).NotTo(HaveOccurred())
 				}
@@ -687,8 +708,7 @@ subjects:
 			Expect(err).NotTo(HaveOccurred(), "rotated token should be valid")
 
 			Eventually(func(g Gomega) {
-				_, err := tokenLookup(firstToken)
-				g.Expect(err).To(HaveOccurred(), "old token should be revoked after the grace period")
+				g.Expect(tokenRevoked(firstToken)).To(BeTrue(), "old token should be revoked after the grace period")
 			}, 60*time.Second, 5*time.Second).Should(Succeed())
 		})
 	})
@@ -869,8 +889,7 @@ type: kubernetes.io/service-account-token
 			Expect(err).NotTo(HaveOccurred(), "rotated token should be valid in the namespace")
 
 			Eventually(func(g Gomega) {
-				_, err := tokenLookup(first)
-				g.Expect(err).To(HaveOccurred(), "old token should be revoked within the namespace")
+				g.Expect(tokenRevoked(first)).To(BeTrue(), "old token should be revoked within the namespace")
 			}, 60*time.Second, 5*time.Second).Should(Succeed())
 		})
 	})
@@ -894,8 +913,7 @@ type: kubernetes.io/service-account-token
 			Expect(err).NotTo(HaveOccurred())
 
 			Eventually(func(g Gomega) {
-				_, err := tokenLookup(token)
-				g.Expect(err).To(HaveOccurred(), "token should be revoked on SIGTERM")
+				g.Expect(tokenRevoked(token)).To(BeTrue(), "token should be revoked on SIGTERM")
 			}, 30*time.Second, 2*time.Second).Should(Succeed())
 		})
 	})

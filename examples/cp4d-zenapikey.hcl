@@ -1,5 +1,7 @@
-# CP4D with static ZenApiKey authentication — no pre-login exchange, no
-# credentials Secret. The ZenApiKey value is base64(username:apikey).
+# CP4D with static ZenApiKey authentication — no pre-login exchange. The
+# ZenApiKey value is base64(username:apikey) and lives in the Secret-mounted
+# credentials file ({"zen_api_key": "..."}), referenced from the header
+# template; the config itself (a ConfigMap) carries no credential material.
 # Vault side: kubernetes auth with a reviewer JWT configured on the mount.
 
 vault {
@@ -16,9 +18,11 @@ push {
   url    = "https://cpd.example.com/zen-data/v2/vaults/1000330999:my-vault?validate_and_save=true"
   method = "PATCH"
 
+  credentials_file = "/etc/minter/credentials/credentials.json"
+
   headers = {
     "Content-Type"  = "application/json"
-    "Authorization" = "ZenApiKey Y3BkYWRtaW46YXBpa2V5"
+    "Authorization" = "ZenApiKey {{ .Credentials.zen_api_key }}"
   }
 
   extra = {

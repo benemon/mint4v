@@ -45,6 +45,7 @@ type Pusher struct {
 	bodyTmpl  *template.Template
 	loginTmpl *template.Template
 	creds     map[string]string
+	headers   map[string]string
 	logger    *slog.Logger
 }
 
@@ -59,20 +60,37 @@ func New(cfg config.Push, logger *slog.Logger) (*Pusher, error) {
 		return nil, err
 	}
 
+	switch {
+	case cfg.CredentialsFile != "":
+		p.creds, err = loadCredentials("push.credentials_file", cfg.CredentialsFile)
+	case cfg.Login != nil && cfg.Login.CredentialsFile != "":
+		p.creds, err = loadCredentials("push.login.credentials_file", cfg.Login.CredentialsFile)
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	if cfg.Login != nil {
 		p.loginTmpl, err = parseTemplate("push.login.body_template", cfg.Login.BodyTemplate)
 		if err != nil {
 			return nil, err
 		}
-		if cfg.Login.CredentialsFile != "" {
-			raw, err := os.ReadFile(cfg.Login.CredentialsFile)
-			if err != nil {
-				return nil, fmt.Errorf("push.login.credentials_file: %w", err)
-			}
-			if err := json.Unmarshal(raw, &p.creds); err != nil {
-				return nil, fmt.Errorf("push.login.credentials_file: parsing JSON: %w", err)
-			}
+	}
+
+	// Header values are templates over .Credentials, rendered once at startup:
+	// a secret-bearing header (e.g. a ZenApiKey) lives in the Secret-mounted
+	// credentials file, never in the ConfigMap-resident config.
+	p.headers = make(map[string]string, len(cfg.Headers))
+	for k, v := range cfg.Headers {
+		tmpl, err := parseTemplate("push.headers."+k, v)
+		if err != nil {
+			return nil, err
 		}
+		rendered, err := render(tmpl, loginData{Credentials: p.creds})
+		if err != nil {
+			return nil, err
+		}
+		p.headers[k] = string(rendered)
 	}
 
 	// Redirects are refused outright: following one would turn the PATCH into
@@ -135,7 +153,7 @@ func (p *Pusher) Push(ctx context.Context, token, accessor string, ttlSeconds in
 	if err != nil {
 		return err
 	}
-	for k, v := range p.cfg.Headers {
+	for k, v := range p.headers {
 		req.Header.Set(k, v)
 	}
 	if bearer != "" {
@@ -217,6 +235,18 @@ func lookupField(obj map[string]any, path string) (string, error) {
 		return "", fmt.Errorf("login response field %q is empty", path)
 	}
 	return s, nil
+}
+
+func loadCredentials(name, path string) (map[string]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	var creds map[string]string
+	if err := json.Unmarshal(raw, &creds); err != nil {
+		return nil, fmt.Errorf("%s: parsing JSON: %w", name, err)
+	}
+	return creds, nil
 }
 
 func parseTemplate(name, text string) (*template.Template, error) {

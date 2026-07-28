@@ -278,6 +278,50 @@ func TestPushRefusesRedirects(t *testing.T) {
 	}
 }
 
+// Header values are templates over .Credentials, so a secret-bearing header
+// can be sourced from the Secret-mounted credentials file at startup instead
+// of sitting in the ConfigMap-resident config.
+func TestHeadersRenderFromCredentials(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p, err := New(config.Push{
+		URL:             srv.URL,
+		Method:          "PATCH",
+		BodyTemplate:    `{{ .VaultToken }}`,
+		CredentialsFile: writeFile(t, "credentials.json", `{"zen_api_key":"emVuOmtleQ=="}`),
+		Headers: map[string]string{
+			"Authorization": "ZenApiKey {{ .Credentials.zen_api_key }}",
+			"Content-Type":  "application/json",
+		},
+	}, discard())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := p.Push(context.Background(), "hvs.tok", "acc", 60); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if gotAuth != "ZenApiKey emVuOmtleQ==" {
+		t.Errorf("Authorization header: got %q", gotAuth)
+	}
+
+	// A header referencing a credential that does not exist must fail at
+	// construction, not silently render empty.
+	_, err = New(config.Push{
+		URL:          srv.URL,
+		Method:       "PATCH",
+		BodyTemplate: `{{ .VaultToken }}`,
+		Headers:      map[string]string{"Authorization": "ZenApiKey {{ .Credentials.absent }}"},
+	}, discard())
+	if err == nil {
+		t.Error("New should reject a header template referencing missing credentials")
+	}
+}
+
 func TestToJSONEscapesTemplatedValues(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -278,6 +278,63 @@ func TestPushRefusesRedirects(t *testing.T) {
 	}
 }
 
+func TestToJSONEscapesTemplatedValues(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("rendered payload is not valid JSON: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	const hostile = `he said "hi" \ and 	 newline` + "\n"
+	p, err := New(config.Push{
+		URL:          srv.URL,
+		Method:       "POST",
+		BodyTemplate: `{"note":{{ toJSON .Extra.note }},"access_token":"{{ .VaultToken }}"}`,
+		Extra:        map[string]string{"note": hostile},
+	}, discard())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := p.Push(context.Background(), "hvs.tok", "acc", 60); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if body["note"] != hostile {
+		t.Errorf("note did not round-trip through toJSON: got %q, want %q", body["note"], hostile)
+	}
+}
+
+func TestPreLoginRejectsBadResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, wantErr string
+	}{
+		{"empty token", `{"token":""}`, "is empty"},
+		{"trailing data", `{"token":"x"} {"token":"y"}`, "data after"},
+		{"oversized", `{"pad":"` + strings.Repeat("a", maxLoginResponseBytes) + `","token":"x"}`, "parsing login response"},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, tc.body)
+		}))
+
+		p, err := New(config.Push{
+			URL:          srv.URL,
+			Method:       "POST",
+			BodyTemplate: `{}`,
+			Login:        &config.Login{URL: srv.URL, BodyTemplate: `{}`, TokenField: "token"},
+		}, discard())
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		err = p.Push(context.Background(), "hvs.tok", "acc", 60)
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s: want error containing %q, got %v", tc.name, tc.wantErr, err)
+		}
+		srv.Close()
+	}
+}
+
 func TestLookupField(t *testing.T) {
 	obj := map[string]any{"token": "a", "data": map[string]any{"token": "b", "n": float64(1)}}
 	for _, tc := range []struct {

@@ -97,8 +97,17 @@ func run(configPath string) error {
 }
 
 func newVaultClient(cfg config.Vault) (*api.Client, error) {
+	// DefaultConfig reads the whole VAULT_* env surface. The HCL config is
+	// authoritative, so everything that would silently reroute or weaken the
+	// connection is overridden; only VAULT_CLIENT_CERT/VAULT_CLIENT_KEY (the
+	// documented mTLS escape hatch) are honoured.
 	vc := api.DefaultConfig()
-	vc.Address = cfg.Address
+	vc.Address = cfg.Address // not VAULT_ADDR
+	vc.AgentAddress = ""     // not VAULT_AGENT_ADDR: logins carry the SA JWT
+	if tp, ok := vc.HttpClient.Transport.(*http.Transport); ok && tp.TLSClientConfig != nil {
+		tp.TLSClientConfig.InsecureSkipVerify = false // not VAULT_SKIP_VERIFY
+		tp.TLSClientConfig.ServerName = ""            // not VAULT_TLS_SERVER_NAME
+	}
 	if cfg.CACertFile != "" {
 		if err := vc.ConfigureTLS(&api.TLSConfig{CACert: cfg.CACertFile}); err != nil {
 			return nil, fmt.Errorf("vault.ca_cert_file: %w", err)
@@ -108,8 +117,11 @@ func newVaultClient(cfg config.Vault) (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	client.ClearToken() // not VAULT_TOKEN: the only token is the one login mints
 	if cfg.Namespace != "" {
 		client.SetNamespace(cfg.Namespace)
+	} else {
+		client.ClearNamespace() // not VAULT_NAMESPACE
 	}
 	return client, nil
 }

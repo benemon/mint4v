@@ -30,6 +30,9 @@ func TestLoadFull(t *testing.T) {
 	if cfg.CredentialsFile() != "/etc/mint4v/credentials/credentials.json" {
 		t.Errorf("credentials file: got %q", cfg.CredentialsFile())
 	}
+	if cfg.Vault.ClientCert != "/etc/mint4v/tls/vault-client/tls.crt" || cfg.Vault.ClientKey != "/etc/mint4v/tls/vault-client/tls.key" {
+		t.Errorf("client cert/key: got %q %q", cfg.Vault.ClientCert, cfg.Vault.ClientKey)
+	}
 	if cfg.Target.Method != "PUT" {
 		t.Errorf("target method not uppercased: got %q", cfg.Target.Method)
 	}
@@ -104,6 +107,29 @@ target {
 				t.Errorf("want error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestLoadRejectsLoneClientCert(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.hcl")
+	cfg := `
+vault {
+  address     = "http://v:8200"
+  client_cert = "/etc/mint4v/tls/vault-client/tls.crt"
+  auth "jwt" {
+    role = "cp4d"
+  }
+}
+target {
+  url           = "http://t/api"
+  body_template = "{{ .VaultToken }}"
+}
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "set together") {
+		t.Errorf("want client_cert/client_key pairing error, got %v", err)
 	}
 }
 

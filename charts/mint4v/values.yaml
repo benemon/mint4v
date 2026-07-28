@@ -36,6 +36,13 @@ vaultCA: ""
 targetCASecret: ""
 targetCA: ""
 
+# mTLS client certificate for Vault listeners that require one
+# (tls_require_and_verify_client_cert). Name of an existing kubernetes.io/tls
+# Secret, mounted at /etc/mint4v/tls/vault-client/ — point vault.client_cert
+# at .../tls.crt and vault.client_key at .../tls.key in the config. No inline
+# form: private keys do not belong in values files.
+vaultClientCertSecret: ""
+
 # Credential for the pre-login step, mounted at
 # /etc/mint4v/credentials/credentials.json. Two forms, mutually exclusive;
 # leave both empty to disable the mount:

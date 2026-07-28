@@ -2,7 +2,9 @@
 // e2e suite. It implements the CP4D session exchange (POST
 // /icp4d-api/v1/authorize with username/api_key returning a bearer token) and
 // the vault update endpoint (PATCH /zen-data/v2/vaults/<urn> expecting
-// {"details":{"vault_address":...,"access_token":...}}). Like real CP4D with
+// {"details":{"vault_address":...,"access_token":...}}), which accepts either
+// a Bearer session token or the static "ZenApiKey base64(username:apikey)"
+// header, matching the documented CP4D contract. Like real CP4D with
 // validate_and_save=true, it verifies the pushed token against Vault
 // (lookup-self) before accepting it. GET /last exposes the last accepted
 // payload for test assertions.
@@ -11,6 +13,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -64,10 +67,16 @@ func main() {
 	})
 
 	mux.HandleFunc("PATCH /zen-data/v2/vaults/{urn}", func(w http.ResponseWriter, r *http.Request) {
-		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		mu.Lock()
-		valid := sessions[bearer]
-		mu.Unlock()
+		valid := false
+		switch auth := r.Header.Get("Authorization"); {
+		case strings.HasPrefix(auth, "Bearer "):
+			mu.Lock()
+			valid = sessions[strings.TrimPrefix(auth, "Bearer ")]
+			mu.Unlock()
+		case strings.HasPrefix(auth, "ZenApiKey "):
+			decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "ZenApiKey "))
+			valid = err == nil && string(decoded) == username+":"+apiKey
+		}
 		if !valid {
 			http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
 			return

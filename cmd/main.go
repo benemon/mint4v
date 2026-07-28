@@ -99,18 +99,19 @@ func run(configPath string) error {
 func newVaultClient(cfg config.Vault) (*api.Client, error) {
 	// DefaultConfig reads the whole VAULT_* env surface. The HCL config is
 	// authoritative, so everything that would silently reroute or weaken the
-	// connection is overridden; only VAULT_CLIENT_CERT/VAULT_CLIENT_KEY (the
-	// documented mTLS escape hatch) are honoured.
+	// connection is overridden; mTLS client certificates are first-class
+	// config (vault.client_cert/client_key), so the env path is dropped too.
 	vc := api.DefaultConfig()
 	vc.Address = cfg.Address // not VAULT_ADDR
 	vc.AgentAddress = ""     // not VAULT_AGENT_ADDR: logins carry the SA JWT
 	if tp, ok := vc.HttpClient.Transport.(*http.Transport); ok && tp.TLSClientConfig != nil {
 		tp.TLSClientConfig.InsecureSkipVerify = false // not VAULT_SKIP_VERIFY
 		tp.TLSClientConfig.ServerName = ""            // not VAULT_TLS_SERVER_NAME
+		tp.TLSClientConfig.GetClientCertificate = nil // not VAULT_CLIENT_CERT/KEY
 	}
-	if cfg.CACert != "" {
-		if err := vc.ConfigureTLS(&api.TLSConfig{CACert: cfg.CACert}); err != nil {
-			return nil, fmt.Errorf("vault.ca_cert: %w", err)
+	if cfg.CACert != "" || cfg.ClientCert != "" {
+		if err := vc.ConfigureTLS(&api.TLSConfig{CACert: cfg.CACert, ClientCert: cfg.ClientCert, ClientKey: cfg.ClientKey}); err != nil {
+			return nil, fmt.Errorf("vault tls: %w", err)
 		}
 	}
 	client, err := api.NewClient(vc)

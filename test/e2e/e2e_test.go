@@ -257,8 +257,10 @@ func splitImage(image string) (repo, tag string) {
 
 // mint4vValues renders the chart values for a given auth method and mount.
 // chartExtras is appended verbatim as extra top-level values (e.g. to switch
-// the token source).
-func mint4vValues(method, mount, chartExtras string) string {
+// the token source). With zenAPIKey the config authenticates pushes via the
+// static ZenApiKey header templated from the credentials file, and carries
+// no login block — the documented login-less CP4D mode.
+func mint4vValues(method, mount, chartExtras string, zenAPIKey bool) string {
 	repo, tag := splitImage(mint4vImage)
 	pullPolicy := "Never"
 	if external {
@@ -266,6 +268,26 @@ func mint4vValues(method, mount, chartExtras string) string {
 		// IfNotPresent would silently run a stale cached build on nodes that
 		// have seen the tag before.
 		pullPolicy = "Always"
+	}
+
+	credsJSON := fmt.Sprintf(`{"username":"%s","api_key":"%s"}`, mockUsername, mockAPIKey)
+	authHeader := ""
+	loginBlock := fmt.Sprintf(`
+
+    login {
+      url         = "http://mockcpd.%s.svc:8080/icp4d-api/v1/authorize"
+      token_field = "token"
+
+      body_template = <<-EOT
+        {"username":{{ toJSON .Credentials.username }},"api_key":{{ toJSON .Credentials.api_key }}}
+      EOT
+    }`, namespace)
+	if zenAPIKey {
+		credsJSON = fmt.Sprintf(`{"zen_api_key":"%s"}`,
+			base64.StdEncoding.EncodeToString([]byte(mockUsername+":"+mockAPIKey)))
+		authHeader = `
+      "Authorization" = "ZenApiKey {{ .Credentials.zen_api_key }}"`
+		loginBlock = ""
 	}
 
 	vaultBlockExtra := ""
@@ -291,7 +313,7 @@ image:
   tag: %[8]s
   pullPolicy: %[9]s
 
-credentials: '{"username":"%[5]s","api_key":"%[6]s"}'
+credentials: '%[5]s'
 %[10]s
 %[3]s
 
@@ -318,7 +340,7 @@ config: |
     method = "PATCH"
 
     headers = {
-      "Content-Type" = "application/json"
+      "Content-Type" = "application/json"%[6]s
     }
 
     extra = {
@@ -327,20 +349,11 @@ config: |
 
     body_template = <<-EOT
       {"details":{"vault_address":"{{ .Extra.vault_address }}","access_token":"{{ .VaultToken }}"}}
-    EOT
-
-    login {
-      url         = "http://mockcpd.%[1]s.svc:8080/icp4d-api/v1/authorize"
-      token_field = "token"
-
-      body_template = <<-EOT
-        {"username":{{ toJSON .Credentials.username }},"api_key":{{ toJSON .Credentials.api_key }}}
-      EOT
-    }
+    EOT%[13]s
   }
-`, namespace, method, chartExtras, mount, mockUsername, mockAPIKey,
+`, namespace, method, chartExtras, mount, credsJSON, authHeader,
 		repo, tag, pullPolicy, valuesExtra, vaultAddrForCluster(),
-		indentHCL(vaultBlockExtra))
+		indentHCL(vaultBlockExtra), loginBlock)
 }
 
 // indentHCL reindents the vault-block extras for the values config heredoc.
@@ -348,9 +361,9 @@ func indentHCL(s string) string {
 	return strings.ReplaceAll(s, "\n", "\n  ")
 }
 
-func helmDeploy(method, mount, chartExtras string) {
+func helmDeploy(method, mount, chartExtras string, zenAPIKey bool) {
 	values := filepath.Join(GinkgoT().TempDir(), "values.yaml")
-	ExpectWithOffset(1, os.WriteFile(values, []byte(mint4vValues(method, mount, chartExtras)), 0o600)).To(Succeed())
+	ExpectWithOffset(1, os.WriteFile(values, []byte(mint4vValues(method, mount, chartExtras, zenAPIKey)), 0o600)).To(Succeed())
 	_, err := utils.Run(exec.Command("helm", "upgrade", "--install", releaseName, "charts/mint4v",
 		"-n", namespace, "-f", values, "--wait", "--timeout", "3m"))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
@@ -671,7 +684,7 @@ subjects:
 		var firstToken string
 
 		It("logs in, performs the CP4D-style pre-login, and pushes a valid token", func() {
-			helmDeploy("kubernetes", mountPath("kubernetes"), "")
+			helmDeploy("kubernetes", mountPath("kubernetes"), "", false)
 
 			var token string
 			Eventually(func(g Gomega) {
@@ -742,7 +755,7 @@ type: kubernetes.io/service-account-token
 			}, 30*time.Second, 2*time.Second).Should(Succeed())
 
 			before, _ := lastPushedToken()
-			helmDeploy("kubernetes", "kubernetes-selfreview", "tokenSecretName: mint4v-legacy-token")
+			helmDeploy("kubernetes", "kubernetes-selfreview", "tokenSecretName: mint4v-legacy-token", false)
 
 			var token string
 			Eventually(func(g Gomega) {
@@ -764,7 +777,7 @@ type: kubernetes.io/service-account-token
 			// tokenAudience "" projects a default-audience token, which is a
 			// valid apiserver credential — required for it to perform its
 			// own TokenReview.
-			helmDeploy("kubernetes", mountPath("kubernetes-external"), `tokenAudience: ""`)
+			helmDeploy("kubernetes", mountPath("kubernetes-external"), `tokenAudience: ""`, false)
 
 			var token string
 			Eventually(func(g Gomega) {
@@ -804,7 +817,7 @@ type: kubernetes.io/service-account-token
 	Context("with jwt auth", func() {
 		It("logs in via the jwt mount and pushes a valid token", func() {
 			before, _ := lastPushedToken()
-			helmDeploy("jwt", mountPath("jwt"), "")
+			helmDeploy("jwt", mountPath("jwt"), "", false)
 
 			var token string
 			Eventually(func(g Gomega) {
@@ -817,6 +830,24 @@ type: kubernetes.io/service-account-token
 			path, err := tokenLookup(token)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(path).To(ContainSubstring("auth/" + mountPath("jwt") + "/login"))
+		})
+	})
+
+	Context("with ZenApiKey header auth (no pre-login)", func() {
+		It("authenticates the push with a header templated from the credentials file", func() {
+			before, _ := lastPushedToken()
+			helmDeploy("kubernetes", mountPath("kubernetes"), "", true)
+
+			var token string
+			Eventually(func(g Gomega) {
+				var err error
+				token, err = lastPushedToken()
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(token).NotTo(Equal(before))
+			}, 90*time.Second, 2*time.Second).Should(Succeed())
+
+			_, err := tokenLookup(token)
+			Expect(err).NotTo(HaveOccurred(), "token pushed via ZenApiKey auth should be valid")
 		})
 	})
 
@@ -864,7 +895,7 @@ type: kubernetes.io/service-account-token
 			activeVaultClient = nsClient
 
 			before, _ := lastPushedToken()
-			helmDeploy("kubernetes", "kubernetes", "")
+			helmDeploy("kubernetes", "kubernetes", "", false)
 
 			var first string
 			Eventually(func(g Gomega) {

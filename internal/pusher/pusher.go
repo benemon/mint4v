@@ -72,7 +72,15 @@ func New(cfg config.Push, logger *slog.Logger) (*Pusher, error) {
 		}
 	}
 
-	p.client = &http.Client{Timeout: 30 * time.Second}
+	// Redirects are refused outright: following one would turn the PATCH into
+	// a bodyless GET whose 200 masks a failed delivery, or replay the token
+	// body to whatever host the Location header names.
+	p.client = &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			return fmt.Errorf("refusing redirect to %s", req.URL.Redacted())
+		},
+	}
 	if cfg.CACertFile != "" {
 		pool, err := x509.SystemCertPool()
 		if err != nil {
@@ -131,7 +139,7 @@ func (p *Pusher) Push(ctx context.Context, token, accessor string, ttlSeconds in
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("target returned %s: %s", resp.Status, readErrorBody(resp.Body))
+		return fmt.Errorf("target returned %s: %s", resp.Status, describeErrorBody(resp))
 	}
 	p.logger.Info("pushed token to target", "url", p.cfg.URL, "status", resp.StatusCode, "accessor", accessor)
 	return nil
@@ -155,7 +163,7 @@ func (p *Pusher) preLogin(ctx context.Context) (string, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", fmt.Errorf("login returned %s: %s", resp.Status, readErrorBody(resp.Body))
+		return "", fmt.Errorf("login returned %s: %s", resp.Status, describeErrorBody(resp))
 	}
 
 	var parsed map[string]any
@@ -209,7 +217,10 @@ func render(tmpl *template.Template, data any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func readErrorBody(r io.Reader) string {
-	b, _ := io.ReadAll(io.LimitReader(r, maxErrorBodyBytes))
-	return strings.TrimSpace(string(b))
+// describeErrorBody drains an error response and describes it without quoting
+// it: target error bodies can echo the request payload, which carries the
+// Vault token or the login credentials.
+func describeErrorBody(resp *http.Response) string {
+	n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyBytes))
+	return fmt.Sprintf("%d-byte %s body withheld", n, resp.Header.Get("Content-Type"))
 }

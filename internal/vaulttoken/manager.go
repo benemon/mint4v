@@ -46,7 +46,9 @@ func NewManager(client *api.Client, auth config.Auth, grace time.Duration, push 
 }
 
 // Healthy reports whether the held token is unexpired and the last push
-// succeeded. Suitable for liveness/readiness probes.
+// succeeded. Suitable for a readiness probe only: an unreachable target makes
+// this false while the retry loop is handling it, and a liveness restart in
+// that state would revoke a still-valid token.
 func (m *Manager) Healthy() (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -73,6 +75,12 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.revoke(secret)
 		return fmt.Errorf("initial push: %w", err)
 	}
+
+	// Grace-period revocations of rotated-out tokens run concurrently so the
+	// replacement is watched (and renewed) from the moment it is pushed; wait
+	// for them so no revocation is abandoned by an exiting Run.
+	var pending sync.WaitGroup
+	defer pending.Wait()
 
 	for {
 		watcher, err := m.client.NewLifetimeWatcher(&api.LifetimeWatcherInput{Secret: secret})
@@ -110,18 +118,20 @@ func (m *Manager) Run(ctx context.Context) error {
 			return nil
 		}
 
-		select {
-		case <-time.After(m.grace):
-		case <-ctx.Done():
-		}
-		m.revoke(secret)
+		// The replacement is live in the target; let the old token drain for
+		// the grace period (cut short on shutdown) without blocking the loop,
+		// which moves straight on to watching the replacement.
+		old := secret
 		secret = next
-
-		if ctx.Err() != nil {
-			m.revoke(secret)
-			m.logger.Info("shut down, token revoked")
-			return nil
-		}
+		pending.Add(1)
+		go func() {
+			defer pending.Done()
+			select {
+			case <-time.After(m.grace):
+			case <-ctx.Done():
+			}
+			m.revoke(old)
+		}()
 	}
 }
 

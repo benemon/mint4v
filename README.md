@@ -154,7 +154,7 @@ One HCL file, passed as `-config /path/to/config.hcl`.
 | Field | Default | Description |
 |-------|---------|-------------|
 | `log_level` | `info` | `debug`, `info`, `warn`, or `error`. Logs never contain the token — accessors only |
-| `health_address` | `:8080` | Listen address for `/healthz`, used by the chart's probes |
+| `health_address` | `:8080` | Listen address for `/healthz` (readiness) and `/livez` (liveness), used by the chart's probes |
 
 ### `vault`
 

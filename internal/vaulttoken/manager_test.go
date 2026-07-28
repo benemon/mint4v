@@ -30,6 +30,7 @@ type fakeVault struct {
 	renews    map[string]int
 	revoked   []string
 	revokedNS []string
+	events    []string // ordered "renew <tok>" / "revoke <tok>" log
 	maxRenews int
 	jwtSeen   string
 }
@@ -59,6 +60,9 @@ func (f *fakeVault) handler() http.Handler {
 		f.mu.Lock()
 		f.renews[token]++
 		over := f.renews[token] > f.maxRenews
+		if !over {
+			f.events = append(f.events, "renew "+token)
+		}
 		f.mu.Unlock()
 		if over {
 			w.WriteHeader(http.StatusForbidden)
@@ -71,6 +75,7 @@ func (f *fakeVault) handler() http.Handler {
 		f.mu.Lock()
 		f.revoked = append(f.revoked, r.Header.Get("X-Vault-Token"))
 		f.revokedNS = append(f.revokedNS, r.Header.Get("X-Vault-Namespace"))
+		f.events = append(f.events, "revoke "+r.Header.Get("X-Vault-Token"))
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -92,6 +97,12 @@ func (f *fakeVault) revokedTokens() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.revoked...)
+}
+
+func (f *fakeVault) eventLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...)
 }
 
 type recordedPush struct {
@@ -271,6 +282,49 @@ func TestRotationRetriesPushFailure(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("token from failed push attempt should be revoked, revoked=%v", revoked)
+	}
+
+	cancel()
+	<-done
+}
+
+// Guards against the replacement token going unwatched while the old token
+// drains: with a grace period longer than the token TTL, the replacement must
+// still get its first renewal before the old token's revocation fires — if
+// the manager only started watching after the grace sleep (the old bug), the
+// replacement would already be past its TTL by then.
+func TestReplacementWatchedDuringGrace(t *testing.T) {
+	fake := newFakeVault()
+	rec := &pushRecorder{}
+	m := newTestManager(t, fake, "kubernetes", rec.push)
+	m.grace = 3 * time.Second // longer than the fake's 2s token TTL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+
+	waitFor(t, 15*time.Second, func() bool { return len(rec.tokens()) >= 2 }, "rotation push of tok-2")
+	waitFor(t, 10*time.Second, func() bool {
+		for _, e := range fake.eventLog() {
+			if e == "revoke tok-1" {
+				return true
+			}
+		}
+		return false
+	}, "grace revocation of tok-1")
+
+	renewIdx, revokeIdx := -1, -1
+	events := fake.eventLog()
+	for i, e := range events {
+		if e == "renew tok-2" && renewIdx == -1 {
+			renewIdx = i
+		}
+		if e == "revoke tok-1" {
+			revokeIdx = i
+		}
+	}
+	if renewIdx == -1 || renewIdx > revokeIdx {
+		t.Errorf("replacement was not renewed while the old token drained; events=%v", events)
 	}
 
 	cancel()

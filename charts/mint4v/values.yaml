@@ -47,7 +47,8 @@ targetCA: ""
 credentialsSecret: ""
 credentials: ""
 
-# Port the /healthz endpoint listens on; must match health_address in config.
+# Port the /healthz and /livez endpoints listen on; must match health_address
+# in config.
 healthPort: 8080
 
 # The complete mint4v configuration, mounted at /etc/minter/config.hcl.

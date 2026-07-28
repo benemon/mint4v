@@ -47,9 +47,12 @@ spec:
               path: /healthz
               port: health
             periodSeconds: 10
+          # Liveness deliberately does not use /healthz: a target outage makes
+          # /healthz fail while the in-process retry loop handles it, and a
+          # restart in that state would revoke a still-valid token.
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /livez
               port: health
             initialDelaySeconds: 15
             periodSeconds: 10

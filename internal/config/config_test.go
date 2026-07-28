@@ -24,20 +24,23 @@ func TestLoadFull(t *testing.T) {
 	if got := cfg.Vault.RevokeGraceDuration(); got != 10*time.Second {
 		t.Errorf("revoke grace: got %v", got)
 	}
-	if cfg.Vault.Auth.Method != "jwt" || cfg.Vault.Auth.MountPath != "jwt-ocp" || cfg.Vault.Auth.TokenFile != "/var/run/secrets/minter/token" {
+	if cfg.Vault.Auth.Method != "jwt" || cfg.Vault.Auth.MountPath != "jwt-ocp" || cfg.Vault.Auth.TokenPath != "/var/run/secrets/minter/token" {
 		t.Errorf("auth: got %+v", cfg.Vault.Auth)
 	}
-	if cfg.Push.Method != "PUT" {
-		t.Errorf("push method not uppercased: got %q", cfg.Push.Method)
+	if cfg.CredentialsFile() != "/etc/minter/credentials/credentials.json" {
+		t.Errorf("credentials file: got %q", cfg.CredentialsFile())
 	}
-	if cfg.Push.Headers["Content-Type"] != "application/json" {
-		t.Errorf("headers: got %v", cfg.Push.Headers)
+	if cfg.Target.Method != "PUT" {
+		t.Errorf("target method not uppercased: got %q", cfg.Target.Method)
 	}
-	if cfg.Push.Extra["vault_id"] != "1" {
-		t.Errorf("extra: got %v", cfg.Push.Extra)
+	if cfg.Target.Headers["Content-Type"] != "application/json" {
+		t.Errorf("headers: got %v", cfg.Target.Headers)
 	}
-	if cfg.Push.Login == nil || cfg.Push.Login.TokenField != "token" {
-		t.Errorf("login: got %+v", cfg.Push.Login)
+	if cfg.Target.Extra["vault_id"] != "1" {
+		t.Errorf("extra: got %v", cfg.Target.Extra)
+	}
+	if cfg.Target.Login == nil || cfg.Target.Login.TokenField != "token" {
+		t.Errorf("login: got %+v", cfg.Target.Login)
 	}
 }
 
@@ -56,14 +59,17 @@ func TestLoadMinimalDefaults(t *testing.T) {
 	if cfg.Vault.Auth.MountPath != "kubernetes" {
 		t.Errorf("default mount path: got %q", cfg.Vault.Auth.MountPath)
 	}
-	if cfg.Vault.Auth.TokenFile != defaultServiceAccountTokenFile {
-		t.Errorf("default token file: got %q", cfg.Vault.Auth.TokenFile)
+	if cfg.Vault.Auth.TokenPath != defaultServiceAccountTokenPath {
+		t.Errorf("default token path: got %q", cfg.Vault.Auth.TokenPath)
 	}
-	if cfg.Push.Method != "POST" {
-		t.Errorf("default push method: got %q", cfg.Push.Method)
+	if cfg.Target.Method != "POST" {
+		t.Errorf("default target method: got %q", cfg.Target.Method)
 	}
-	if cfg.Push.Login != nil {
-		t.Errorf("login should be nil, got %+v", cfg.Push.Login)
+	if cfg.Target.Login != nil {
+		t.Errorf("login should be nil, got %+v", cfg.Target.Login)
+	}
+	if cfg.CredentialsFile() != "" {
+		t.Errorf("credentials file should default empty, got %q", cfg.CredentialsFile())
 	}
 }
 
@@ -72,24 +78,23 @@ func TestLoadErrors(t *testing.T) {
 vault {
   address = "%s"
   revoke_grace = "%s"
-  auth {
-    method = "%s"
-    role   = "cp4d"
+  auth "%s" {
+    role = "cp4d"
   }
 }
-push {
-  url                = "%s"
-  body_template      = "{{ .VaultToken }}"
+target {
+  url           = "%s"
+  body_template = "{{ .VaultToken }}"
 }
 `
 	cases := []struct {
 		name                                  string
 		address, grace, method, pushURL, want string
 	}{
-		{"bad auth method", "http://v:8200", "30s", "approle", "http://t/api", "vault.auth.method"},
+		{"bad auth method", "http://v:8200", "30s", "approle", "http://t/api", "vault.auth block label"},
 		{"bad revoke grace", "http://v:8200", "soon", "jwt", "http://t/api", "revoke_grace"},
 		{"bad vault address", "not-a-url", "30s", "jwt", "http://t/api", "vault.address"},
-		{"bad push url", "http://v:8200", "30s", "jwt", "ftp://t/api", "push.url"},
+		{"bad target url", "http://v:8200", "30s", "jwt", "ftp://t/api", "target.url"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,39 +107,9 @@ push {
 	}
 }
 
-func TestLoadRejectsDualCredentialsFiles(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "c.hcl")
-	cfg := `
-vault {
-  address = "http://v:8200"
-  auth {
-    method = "jwt"
-    role   = "cp4d"
-  }
-}
-push {
-  url              = "http://t/api"
-  body_template    = "{{ .VaultToken }}"
-  credentials_file = "/etc/minter/credentials/credentials.json"
-  login {
-    url              = "http://t/login"
-    body_template    = "{}"
-    token_field      = "token"
-    credentials_file = "/etc/minter/credentials/credentials.json"
-  }
-}
-`
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "not both") {
-		t.Errorf("want dual credentials_file error, got %v", err)
-	}
-}
-
 func TestLoadRejectsMissingRequiredAttr(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.hcl")
-	if err := os.WriteFile(path, []byte(`vault { address = "http://v:8200" auth { method = "jwt" } }`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`vault { address = "http://v:8200" auth "jwt" {} }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err == nil {

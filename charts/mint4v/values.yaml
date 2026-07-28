@@ -30,7 +30,7 @@ tokenSecretName: ""
 #     CA Secret's ca.crt appears at /etc/minter/tls/<vault|target>/ca.crt.
 #   - *CA: inline PEM; the chart creates a Secret with the bundle under the
 #     key ca.crt, mounted at the same path.
-# Either way, ca_cert_file in the config points at the mounted path.
+# Either way, ca_cert in the config points at the mounted path.
 vaultCASecret: ""
 vaultCA: ""
 targetCASecret: ""
@@ -60,21 +60,24 @@ healthPort: 8080
 config: |
   vault {
     address = "https://vault.example.com:8200"
-    # ca_cert_file = "/etc/minter/tls/vault/ca.crt"
+    # ca_cert = "/etc/minter/tls/vault/ca.crt"
 
-    auth {
-      method     = "kubernetes"
+    auth "kubernetes" {
       role       = "cp4d"
-      token_file = "/var/run/secrets/minter/token"
+      token_path = "/var/run/secrets/minter/token"
     }
   }
 
-  push {
+  credentials {
+    file = "/etc/minter/credentials/credentials.json"
+  }
+
+  target {
     # CP4D vault update API; validate_and_save makes CP4D test the pushed
     # token against Vault before saving it.
     url    = "https://cpd.example.com/zen-data/v2/vaults/1000330999:my-vault?validate_and_save=true"
     method = "PATCH"
-    # ca_cert_file = "/etc/minter/tls/target/ca.crt"
+    # ca_cert = "/etc/minter/tls/target/ca.crt"
 
     headers = {
       "Content-Type" = "application/json"
@@ -95,8 +98,6 @@ config: |
       body_template = <<-EOT
         {"username":{{ toJSON .Credentials.username }},"api_key":{{ toJSON .Credentials.api_key }}}
       EOT
-
-      credentials_file = "/etc/minter/credentials/credentials.json"
     }
   }
 

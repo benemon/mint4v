@@ -152,7 +152,14 @@ reference.
 
 ## Configuration reference
 
-One HCL file, passed as `-config /path/to/config.hcl`.
+One HCL file, passed as `-config /path/to/config.hcl`. Three blocks name
+the three things involved: `vault` (where tokens come from), `credentials`
+(what authenticates to the target), and `target` (where tokens go). Block
+and attribute names follow
+[Vault Agent](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent)
+vocabulary where the concepts coincide — see
+[docs/config-design.md](docs/config-design.md) for the rationale and the
+deliberate divergences.
 
 ### Top level
 
@@ -167,37 +174,47 @@ One HCL file, passed as `-config /path/to/config.hcl`.
 |-------|---------|-------------|
 | `address` | | Vault address (required) |
 | `namespace` | | [Vault Enterprise namespace](https://developer.hashicorp.com/vault/docs/enterprise/namespaces) |
-| `ca_cert_file` | | PEM bundle that **replaces** the trust pool for the Vault connection (a true pin — only this CA validates Vault), mounted from a Secret (`vaultCASecret` in the chart) |
+| `ca_cert` | | PEM bundle that **replaces** the trust pool for the Vault connection (a true pin — only this CA validates Vault), mounted from a Secret (`vaultCASecret` in the chart) |
 | — | | mTLS client certificates for Vault listeners that require them are not first-class config; the client honours `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` env vars, but this path is untested. All other `VAULT_*` environment variables are ignored: the config file is authoritative, so `VAULT_ADDR`, `VAULT_AGENT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`, `VAULT_SKIP_VERIFY`, and `VAULT_TLS_SERVER_NAME` cannot reroute or weaken the connection |
 | `revoke_grace` | `30s` | How long the old token outlives its replacement after a rotation push |
 
-### `vault.auth`
+### `vault.auth` (labelled block)
+
+The block label selects the auth method:
+`auth "kubernetes" { ... }` for
+[kubernetes](https://developer.hashicorp.com/vault/docs/auth/kubernetes),
+`auth "jwt" { ... }` for
+[jwt](https://developer.hashicorp.com/vault/docs/auth/jwt).
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `method` | | [`kubernetes`](https://developer.hashicorp.com/vault/docs/auth/kubernetes) or [`jwt`](https://developer.hashicorp.com/vault/docs/auth/jwt) (required) |
 | `role` | | Vault auth role (required) |
 | `mount_path` | method name | Auth mount path |
-| `token_file` | in-pod SA token path | ServiceAccount token file. The chart mounts a [projected token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) at `/var/run/secrets/minter/token` |
+| `token_path` | in-pod SA token path | ServiceAccount token file. The chart mounts a [projected token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) at `/var/run/secrets/minter/token` |
 
-### `push`
+### `credentials` (optional block)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `file` | | Flat JSON object mounted from a Secret, exposed as `{{ .Credentials.* }}` to both target header templates and the login body template |
+
+### `target`
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `url` | | Target URL (required). For CP4D: `https://<host>/zen-data/v2/vaults/<urn>?validate_and_save=true` |
 | `method` | `POST` | HTTP method. CP4D vault updates use `PATCH` |
-| `ca_cert_file` | | PEM bundle for the target connection, mounted from a Secret (`targetCASecret` in the chart). Deliberately a separate pool from the Vault CA |
+| `ca_cert` | | PEM bundle for the target connection, mounted from a Secret (`targetCASecret` in the chart). Deliberately a separate pool from the Vault CA |
 | `body_template` | | Inline payload template, usually an [HCL heredoc](https://developer.hashicorp.com/terraform/language/expressions/strings#heredoc-strings) (required) |
-| `credentials_file` | | JSON object mounted from a Secret, exposed to header templates as `{{ .Credentials.* }}`. Mutually exclusive with `push.login.credentials_file` (one file feeds both) |
 | `headers` | | Request headers. Values are templates rendered once at startup with `{{ .Credentials.* }}`, so a secret-bearing header (e.g. a ZenApiKey) is sourced from the credentials Secret, never inlined in the ConfigMap-resident config |
 | `extra` | | Static key/values exposed to the payload template as `{{ .Extra.* }}` |
 
-### `push.login` (optional block)
+### `target.login` (optional block)
 
 CP4D always authenticates — this block is one of the two ways to satisfy
 it. Include it for the Bearer session exchange against
 `/icp4d-api/v1/authorize`; omit it and template the ZenApiKey into
-`push.headers` from `push.credentials_file` (e.g.
+`target.headers` from the `credentials` block (e.g.
 `Authorization = "ZenApiKey {{ .Credentials.zen_api_key }}"`) instead. See
 [Cloud Pak for Data integration](#cloud-pak-for-data-integration) for the
 trade-off. (Only a non-CP4D target with genuinely unauthenticated writes
@@ -208,13 +225,12 @@ would omit both.)
 | `url` | | Login endpoint. For CP4D: `https://<host>/icp4d-api/v1/authorize` |
 | `body_template` | | Inline login body template, rendered with `{{ .Credentials.* }}` |
 | `token_field` | | Dot-path to the bearer token in the JSON response (`token` for CP4D) |
-| `credentials_file` | | JSON object mounted from a Secret, exposed as `{{ .Credentials.* }}` |
 
 ### Templating
 
 Two inline Go [`text/template`](https://pkg.go.dev/text/template) strings
-drive everything mint4v sends. `push.body_template` renders the payload for
-every push — the initial one and each rotation. `push.login.body_template`,
+drive everything mint4v sends. `target.body_template` renders the payload
+for every push — the initial one and each rotation. `target.login.body_template`,
 when the `login` block is present, renders the pre-login body immediately
 before each push. Both are parsed once at startup, so a syntax error fails
 the process before it ever touches Vault; rendering happens per request.
@@ -228,19 +244,19 @@ Payload template:
 | `{{ .VaultToken }}` | string | the minted Vault service token — the secret being delivered |
 | `{{ .Accessor }}` | string | the token's accessor: safe to log or store, usable by a Vault administrator for lookup and revocation but never for authentication |
 | `{{ .TTLSeconds }}` | int | the token's TTL at mint time — a number, so leave it unquoted in JSON |
-| `{{ .Extra.<key> }}` | string | static values from `push.extra`, for anything the target wants alongside the token (the vault address, an integration id) |
+| `{{ .Extra.<key> }}` | string | static values from `target.extra`, for anything the target wants alongside the token (the vault address, an integration id) |
 
 Login template:
 
 | Variable | Type | Value |
 |----------|------|-------|
-| `{{ .Credentials.<key> }}` | string | keys of the flat JSON object read from `credentials_file` at startup |
+| `{{ .Credentials.<key> }}` | string | keys of the flat JSON object read from `credentials.file` at startup; also available to `target.headers` values |
 
 The data model is deliberately this small: one custom function (`toJSON`,
 which emits a value as a JSON literal — see [Escaping](#escaping)), no
 Sprig, no file access, no way to reach anything not listed. A template
 controls the shape of one HTTP body, nothing more — if the target needs
-another value, add it to `push.extra`; if it needs computation, do it
+another value, add it to `target.extra`; if it needs computation, do it
 before it reaches the config.
 
 #### Failure semantics
@@ -311,7 +327,7 @@ CP4D tests the pushed token against Vault before saving it, so every
 rotation is verified end to end. The matching config:
 
 ```hcl
-push {
+target {
   url     = "https://cpd.example.com/zen-data/v2/vaults/1000330999:my-vault?validate_and_save=true"
   method  = "PATCH"
   headers = { "Content-Type" = "application/json" }
@@ -327,10 +343,10 @@ CP4D accepts two authentication styles, both supported:
 
 - **ZenApiKey** (static): omit the `login` block; store
   `{"zen_api_key": "<base64 of username:apikey>"}` in the credentials Secret,
-  point `push.credentials_file` at it, and set
+  point `credentials.file` at it, and set
   `Authorization = "ZenApiKey {{ .Credentials.zen_api_key }}"` in
-  `push.headers`. The key stays in Secret custody — never put the literal
-  value in `push.headers`, which lands in a ConfigMap.
+  `target.headers`. The key stays in Secret custody — never put the literal
+  value in `target.headers`, which lands in a ConfigMap.
 - **Bearer session token**: point the `login` block at
   `/icp4d-api/v1/authorize` with `token_field = "token"`. The exchange runs
   before each push; pushes happen once per rotation, so session-token expiry

@@ -55,7 +55,7 @@ func run(configPath string) error {
 		return err
 	}
 
-	p, err := pusher.New(cfg.Push, logger)
+	p, err := pusher.New(cfg.Target, cfg.CredentialsFile(), logger)
 	if err != nil {
 		return err
 	}
@@ -108,9 +108,9 @@ func newVaultClient(cfg config.Vault) (*api.Client, error) {
 		tp.TLSClientConfig.InsecureSkipVerify = false // not VAULT_SKIP_VERIFY
 		tp.TLSClientConfig.ServerName = ""            // not VAULT_TLS_SERVER_NAME
 	}
-	if cfg.CACertFile != "" {
-		if err := vc.ConfigureTLS(&api.TLSConfig{CACert: cfg.CACertFile}); err != nil {
-			return nil, fmt.Errorf("vault.ca_cert_file: %w", err)
+	if cfg.CACert != "" {
+		if err := vc.ConfigureTLS(&api.TLSConfig{CACert: cfg.CACert}); err != nil {
+			return nil, fmt.Errorf("vault.ca_cert: %w", err)
 		}
 	}
 	client, err := api.NewClient(vc)

@@ -262,7 +262,10 @@ func minterValues(method, mount, chartExtras string) string {
 	repo, tag := splitImage(minterImage)
 	pullPolicy := "Never"
 	if external {
-		pullPolicy = "IfNotPresent"
+		// The external images are mutable :latest tags in a registry;
+		// IfNotPresent would silently run a stale cached build on nodes that
+		// have seen the tag before.
+		pullPolicy = "Always"
 	}
 
 	vaultBlockExtra := ""
@@ -277,7 +280,7 @@ func minterValues(method, mount, chartExtras string) string {
 		if caFile := os.Getenv("VAULT_CACERT"); caFile != "" {
 			ca, err := os.ReadFile(caFile)
 			Expect(err).NotTo(HaveOccurred())
-			vaultBlockExtra += "\n    ca_cert_file = \"/etc/minter/tls/vault/ca.crt\""
+			vaultBlockExtra += "\n    ca_cert = \"/etc/minter/tls/vault/ca.crt\""
 			valuesExtra += "vaultCA: |\n" + indent(string(ca), "  ") + "\n"
 		}
 	}
@@ -299,15 +302,18 @@ config: |
     address      = "%[11]s"
     revoke_grace = "5s"%[12]s
 
-    auth {
-      method     = "%[2]s"
+    auth "%[2]s" {
       mount_path = "%[4]s"
       role       = "mint4v"
-      token_file = "/var/run/secrets/minter/token"
+      token_path = "/var/run/secrets/minter/token"
     }
   }
 
-  push {
+  credentials {
+    file = "/etc/minter/credentials/credentials.json"
+  }
+
+  target {
     url    = "http://mockcpd.%[1]s.svc:8080/zen-data/v2/vaults/1000330999:e2e-vault?validate_and_save=true"
     method = "PATCH"
 
@@ -330,8 +336,6 @@ config: |
       body_template = <<-EOT
         {"username":{{ toJSON .Credentials.username }},"api_key":{{ toJSON .Credentials.api_key }}}
       EOT
-
-      credentials_file = "/etc/minter/credentials/credentials.json"
     }
   }
 `, namespace, method, chartExtras, mount, mockUsername, mockAPIKey,

@@ -183,14 +183,14 @@ func (m *Manager) login(ctx context.Context) (*api.Secret, error) {
 		var auth *k8sauth.KubernetesAuth
 		auth, err = k8sauth.NewKubernetesAuth(m.auth.Role,
 			k8sauth.WithMountPath(m.auth.MountPath),
-			k8sauth.WithServiceAccountTokenPath(m.auth.TokenFile))
+			k8sauth.WithServiceAccountTokenPath(m.auth.TokenPath))
 		if err != nil {
 			return nil, err
 		}
 		secret, err = m.client.Auth().Login(ctx, auth)
 	case "jwt":
 		var jwt []byte
-		jwt, err = os.ReadFile(m.auth.TokenFile)
+		jwt, err = os.ReadFile(m.auth.TokenPath)
 		if err != nil {
 			return nil, fmt.Errorf("reading service account token: %w", err)
 		}

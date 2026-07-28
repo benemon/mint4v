@@ -138,7 +138,9 @@ flowchart LR
 
 * The minted token exists only in process memory; it is never written to disk
   and never logged (logs carry the token accessor only). Template execution
-  errors and HTTP error bodies are sanitized/truncated before logging.
+  errors are reduced to the error string, and HTTP error response bodies are
+  never logged at all — only their status, content type, and length — since a
+  target error can echo the submitted payload.
 * Batch tokens are refused at login; only renewable service tokens (which can
   be revoked) are accepted.
 * On SIGTERM the token is revoked before exit; on crash, the token dies at
@@ -146,8 +148,14 @@ flowchart LR
   period. Failed pushes never leave the old token revoked prematurely.
 * CP4D's `validate_and_save=true` causes CP4D to verify each pushed token
   against Vault before accepting it, making a rogue or broken push visible.
-* The `/healthz` endpoint is unauthenticated by design (the kubelet probes
-  it); it exposes only a coarse status string, never token material.
+* HTTP redirects from the target are refused: following one would convert the
+  push into a bodyless GET whose success response masks a failed delivery, or
+  replay the token body to another host.
+* The `/healthz` (readiness) and `/livez` (liveness) endpoints are
+  unauthenticated by design (the kubelet probes them); they expose only a
+  coarse status string, never token material. Liveness deliberately ignores
+  delivery state so a target outage cannot trigger a restart that revokes a
+  still-valid token.
 
 ## Threats
 
@@ -169,8 +177,8 @@ it:
 | 1 | An attacker snoops on or tampers with traffic between mint4v and Vault | Information disclosure, tampering, spoofing | Login requests carry the SA token; responses carry the minted token. The route may cross namespaces or leave the cluster. | TLS with a pinned CA (`vault.ca_cert_file`); never expose Vault over plaintext outside dev. |
 | 2 | An attacker snoops on traffic between mint4v and CP4D | Information disclosure, spoofing | Every push carries the minted token in the request body, and the pre-login carries the CP4D credential. CP4D may sit outside the cluster. | TLS with a pinned CA (`push.ca_cert_file`); the separate CA pool prevents a compromised Vault CA from validating the CP4D route or vice versa. |
 | 3 | Compromise of the mint4v pod | Elevation of privilege, information disclosure | An attacker in the pod can read the minted token from memory, use the SA token to mint more tokens, and read the CP4D credential. | Restricted pod profile (non-root, read-only rootfs, no shell in ubi-micro, `restricted-v2` compatible); narrow Vault policy bounds what any minted token can do; short TTLs bound duration; audience-bound short-expiry projected tokens limit SA token reuse; Vault audit log attributes all mints to this SA. |
-| 4 | Token leak via logs or error messages | Information disclosure | Failure paths (template errors, HTTP errors) can embed the data being processed. | mint4v never logs the token: accessor-only logging, template errors are reduced to the error string, response bodies are truncated. Covered by unit test `TestPushErrorNeverContainsToken`. |
-| 5 | Orphaned live token after a crash | Information disclosure | If mint4v dies without revoking (SIGKILL, node loss), the current token stays valid until its TTL. | Keep `token_ttl` short; the liveness probe restarts an unhealthy pod, which mints fresh and re-pushes; monitor Vault audit logs for tokens that stop renewing. |
+| 4 | Token leak via logs or error messages | Information disclosure | Failure paths (template errors, HTTP errors) can embed the data being processed — a target error body may even echo the submitted payload. | mint4v never logs the token: accessor-only logging, template errors are reduced to the error string, error response bodies are withheld entirely (only status, content type, and length are reported). Covered by unit tests `TestPushErrorNeverContainsToken` and `TestLoginErrorNeverContainsCredentials`, which assert against reflective error bodies. |
+| 5 | Orphaned live token after a crash | Information disclosure | If mint4v dies without revoking (SIGKILL, node loss), the current token stays valid until its TTL. | Keep `token_ttl` short; a crashed or wedged process fails `/livez` and is restarted, minting fresh and re-pushing; monitor Vault audit logs for tokens that stop renewing. |
 | 6 | A second minter instance races pushes and revocations | Denial of service, tampering | Two replicas would push competing tokens and revoke each other's, breaking CP4D's integration intermittently. | The chart hardcodes one replica with a `Recreate` strategy; CP4D credentials control who else can update the vault connection. |
 | 7 | Rogue push to CP4D (attacker replaces the stored token) | Tampering, spoofing | Anyone holding a CP4D credential with vault-admin rights can overwrite the integration token. | Scope the CP4D user to vault administration only; `validate_and_save=true` forces the pushed token to be live in Vault, so a fabricated token is rejected; CP4D audit shows the update. |
 | 8 | Overly permissive Vault role or policy | Elevation of privilege | The minted token's policy is what CP4D — and any thief of the token — can do in Vault. | Least-privilege policy per integration; bind the role to exactly the minter's SA name/namespace; use a dedicated role per CP4D instance. |

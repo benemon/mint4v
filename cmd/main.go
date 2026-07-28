@@ -63,6 +63,13 @@ func run(configPath string) error {
 	manager := vaulttoken.NewManager(client, cfg.Vault.Auth, cfg.Vault.RevokeGraceDuration(), p.Push, logger)
 
 	mux := http.NewServeMux()
+	// Liveness: the process is up and serving. Delivery state must never feed
+	// liveness — restarting the pod during a target outage would revoke a
+	// token that is still working for the target.
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintln(w, "ok")
+	})
+	// Readiness: the held token is live and was delivered to the target.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		ok, reason := manager.Healthy()
 		if !ok {

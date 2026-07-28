@@ -149,8 +149,11 @@ func TestPushCustomCA(t *testing.T) {
 
 func TestPushErrorNeverContainsToken(t *testing.T) {
 	const token = "hvs.supersecret"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	// The server echoes the request body back in the error response, as CP4D
+	// does for some 400s: the error must not quote the reflected payload.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		http.Error(w, "bad request: "+string(body), http.StatusBadRequest)
 	}))
 	defer srv.Close()
 
@@ -187,7 +190,91 @@ func TestPushErrorNeverContainsToken(t *testing.T) {
 		t.Fatalf("want 400 error, got %v", err)
 	}
 	if strings.Contains(err.Error(), token) {
-		t.Errorf("http error leaks token: %v", err)
+		t.Errorf("http error leaks reflected token: %v", err)
+	}
+}
+
+func TestLoginErrorNeverContainsCredentials(t *testing.T) {
+	// A pre-login 4xx that echoes the request, as some gateways do, must not
+	// surface the credentials in the returned error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		http.Error(w, "unauthorized: "+string(body), http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	p, err := New(config.Push{
+		URL:          srv.URL,
+		Method:       "PATCH",
+		BodyTemplate: `{{ .VaultToken }}`,
+		Login: &config.Login{
+			URL:             srv.URL,
+			BodyTemplate:    `{"username":"{{ .Credentials.username }}","api_key":"{{ .Credentials.api_key }}"}`,
+			TokenField:      "token",
+			CredentialsFile: writeFile(t, "credentials.json", `{"username":"admin","api_key":"s3cr3t-key"}`),
+		},
+	}, discard())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	err = p.Push(context.Background(), "hvs.tok", "acc", 60)
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("want 401 error, got %v", err)
+	}
+	for _, secret := range []string{"admin", "s3cr3t-key", "hvs.tok"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("login error leaks %q: %v", secret, err)
+		}
+	}
+}
+
+func TestPushRefusesRedirects(t *testing.T) {
+	const token = "hvs.supersecret"
+	for _, code := range []int{301, 302, 303, 307, 308} {
+		var followed bool
+		mux := http.NewServeMux()
+		mux.HandleFunc("/moved", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/elsewhere", code)
+		})
+		mux.HandleFunc("/elsewhere", func(w http.ResponseWriter, _ *http.Request) {
+			followed = true
+			w.WriteHeader(http.StatusOK)
+		})
+		srv := httptest.NewServer(mux)
+
+		p, err := New(config.Push{URL: srv.URL + "/moved", Method: "PATCH", BodyTemplate: `{{ .VaultToken }}`}, discard())
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		err = p.Push(context.Background(), token, "acc", 60)
+		if err == nil {
+			t.Errorf("%d: a redirected push must not report success", code)
+		} else if strings.Contains(err.Error(), token) {
+			t.Errorf("%d: redirect error leaks token: %v", code, err)
+		}
+		if followed {
+			t.Errorf("%d: redirect was followed", code)
+		}
+
+		// A redirected pre-login must fail the whole push the same way.
+		p2, err := New(config.Push{
+			URL:          srv.URL + "/elsewhere",
+			Method:       "PATCH",
+			BodyTemplate: `{{ .VaultToken }}`,
+			Login: &config.Login{
+				URL:          srv.URL + "/moved",
+				BodyTemplate: `{}`,
+				TokenField:   "token",
+			},
+		}, discard())
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := p2.Push(context.Background(), token, "acc", 60); err == nil {
+			t.Errorf("%d: a redirected pre-login must not report success", code)
+		}
+		srv.Close()
 	}
 }
 

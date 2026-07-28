@@ -175,7 +175,9 @@ deliberate divergences.
 | `address` | | Vault address (required) |
 | `namespace` | | [Vault Enterprise namespace](https://developer.hashicorp.com/vault/docs/enterprise/namespaces) |
 | `ca_cert` | | PEM bundle that **replaces** the trust pool for the Vault connection (a true pin — only this CA validates Vault), mounted from a Secret (`vaultCASecret` in the chart) |
-| — | | mTLS client certificates for Vault listeners that require them are not first-class config; the client honours `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` env vars, but this path is untested. All other `VAULT_*` environment variables are ignored: the config file is authoritative, so `VAULT_ADDR`, `VAULT_AGENT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`, `VAULT_SKIP_VERIFY`, and `VAULT_TLS_SERVER_NAME` cannot reroute or weaken the connection |
+| `client_cert` | | PEM client certificate for Vault listeners requiring mutual TLS (`tls_require_and_verify_client_cert`); set together with `client_key`. Mounted from a `kubernetes.io/tls` Secret (`vaultClientCertSecret` in the chart) |
+| `client_key` | | PEM private key for `client_cert` |
+| — | | **All** `VAULT_*` environment variables are ignored: the config file is authoritative, so `VAULT_ADDR`, `VAULT_AGENT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`, `VAULT_SKIP_VERIFY`, `VAULT_TLS_SERVER_NAME`, and `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` cannot reroute or weaken the connection |
 | `revoke_grace` | `30s` | How long the old token outlives its replacement after a rotation push |
 
 ### `vault.auth` (labelled block)
@@ -459,7 +461,9 @@ revoked after the grace period, recovered after an out-of-band revocation,
 and revoked when the Deployment is scaled down. The other trust models
 (self-review, client-JWT, and the jwt method) assert login plus one valid
 push — they exercise the auth path, not the lifecycle, which is
-model-independent code. With `VAULT_LICENSE` set, the dev Vault runs Vault
+model-independent code. A further spec covers the login-less ZenApiKey
+mode: the push authenticates via a header templated from the credentials
+file, against the mock's ZenApiKey validation. With `VAULT_LICENSE` set, the dev Vault runs Vault
 Enterprise (`hashicorp/vault-enterprise:2.0-ent`) and a further spec proves
 the full mint/renew/rotate/revoke lifecycle inside a Vault namespace;
 without a license that spec skips.

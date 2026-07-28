@@ -33,6 +33,8 @@ type Vault struct {
 	Address     string `hcl:"address"`
 	Namespace   string `hcl:"namespace,optional"`
 	CACert      string `hcl:"ca_cert,optional"`
+	ClientCert  string `hcl:"client_cert,optional"`
+	ClientKey   string `hcl:"client_key,optional"`
 	RevokeGrace string `hcl:"revoke_grace,optional"`
 	Auth        Auth   `hcl:"auth,block"`
 
@@ -100,6 +102,10 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("vault.revoke_grace: %w", err)
 	}
 	cfg.Vault.revokeGrace = grace
+
+	if (cfg.Vault.ClientCert == "") != (cfg.Vault.ClientKey == "") {
+		return nil, fmt.Errorf("vault.client_cert and vault.client_key must be set together")
+	}
 
 	switch cfg.Vault.Auth.Method {
 	case "kubernetes", "jwt":

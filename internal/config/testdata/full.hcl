@@ -5,6 +5,8 @@ vault {
   address      = "https://vault.example.com:8200"
   namespace    = "admin/infra"
   ca_cert      = "/etc/mint4v/tls/vault-ca.pem"
+  client_cert  = "/etc/mint4v/tls/vault-client/tls.crt"
+  client_key   = "/etc/mint4v/tls/vault-client/tls.key"
   revoke_grace = "10s"
 
   auth "jwt" {

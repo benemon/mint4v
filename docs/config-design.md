@@ -26,8 +26,8 @@ mint4v is structurally a specialised
 auto-auth, then template, then deliver. Its operators are Vault operators,
 so where the concepts coincide the config borrows Agent's vocabulary:
 
-- `vault { address, namespace, ca_cert }` — Agent's block and attribute
-  names (`ca_cert`, not `ca_cert_file`).
+- `vault { address, namespace, ca_cert, client_cert, client_key }` —
+  Agent's block and attribute names (`ca_cert`, not `ca_cert_file`).
 - `auth "kubernetes" { role, mount_path, token_path }` — a labelled block
   selecting the method, echoing Agent's `method "kubernetes"`, with Agent's
   `role`/`token_path` attribute names. A labelled block gives each method

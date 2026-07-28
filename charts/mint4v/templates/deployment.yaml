@@ -76,6 +76,11 @@ spec:
               mountPath: /etc/mint4v/tls/vault
               readOnly: true
             {{- end }}
+            {{- if .Values.vaultClientCertSecret }}
+            - name: vault-client-cert
+              mountPath: /etc/mint4v/tls/vault-client
+              readOnly: true
+            {{- end }}
             {{- if or .Values.targetCASecret .Values.targetCA }}
             - name: target-ca
               mountPath: /etc/mint4v/tls/target
@@ -111,6 +116,11 @@ spec:
         - name: vault-ca
           secret:
             secretName: {{ include "mint4v.vaultCASecretName" . }}
+        {{- end }}
+        {{- if .Values.vaultClientCertSecret }}
+        - name: vault-client-cert
+          secret:
+            secretName: {{ .Values.vaultClientCertSecret }}
         {{- end }}
         {{- if or .Values.targetCASecret .Values.targetCA }}
         - name: target-ca

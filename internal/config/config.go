@@ -46,13 +46,14 @@ type Auth struct {
 // Templates are inline (HCL heredocs): Go templates interpolate with {{ }},
 // HCL with ${ }, so the two never collide.
 type Push struct {
-	URL          string            `hcl:"url"`
-	Method       string            `hcl:"method,optional"`
-	CACertFile   string            `hcl:"ca_cert_file,optional"`
-	BodyTemplate string            `hcl:"body_template"`
-	Headers      map[string]string `hcl:"headers,optional"`
-	Extra        map[string]string `hcl:"extra,optional"`
-	Login        *Login            `hcl:"login,block"`
+	URL             string            `hcl:"url"`
+	Method          string            `hcl:"method,optional"`
+	CACertFile      string            `hcl:"ca_cert_file,optional"`
+	BodyTemplate    string            `hcl:"body_template"`
+	CredentialsFile string            `hcl:"credentials_file,optional"`
+	Headers         map[string]string `hcl:"headers,optional"`
+	Extra           map[string]string `hcl:"extra,optional"`
+	Login           *Login            `hcl:"login,block"`
 }
 
 // Login is an optional pre-login request that exchanges a credential for a
@@ -102,6 +103,12 @@ func Load(path string) (*Config, error) {
 		cfg.Push.Method = "POST"
 	}
 	cfg.Push.Method = strings.ToUpper(cfg.Push.Method)
+
+	// One credentials file feeds both header and login templates; two
+	// locations for it would be ambiguous.
+	if cfg.Push.CredentialsFile != "" && cfg.Push.Login != nil && cfg.Push.Login.CredentialsFile != "" {
+		return nil, fmt.Errorf("set push.credentials_file or push.login.credentials_file, not both")
+	}
 
 	for name, raw := range map[string]string{
 		"vault.address": cfg.Vault.Address,

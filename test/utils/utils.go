@@ -15,17 +15,29 @@ import (
 )
 
 // Run executes the provided command from the project root and returns its
-// combined output.
+// combined output. Logged command lines are redacted: GHA masks secrets in
+// its logs, but local and other runners echo them verbatim.
 func Run(cmd *exec.Cmd) (string, error) {
 	cmd.Dir = ProjectRoot()
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
-	command := strings.Join(cmd.Args, " ")
+	command := redact(strings.Join(cmd.Args, " "))
 	_, _ = fmt.Fprintf(GinkgoWriter, "running: %s\n", command)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("%s failed: %w: %s", command, err, string(output))
 	}
 	return string(output), nil
+}
+
+// redact masks the values of secret-bearing environment variables wherever
+// they appear in s.
+func redact(s string) string {
+	for _, env := range []string{"E2E_VAULT_TOKEN", "VAULT_LICENSE"} {
+		if v := os.Getenv(env); v != "" {
+			s = strings.ReplaceAll(s, v, "***")
+		}
+	}
+	return s
 }
 
 // ProjectRoot returns the repository root, normalizing away the test/e2e

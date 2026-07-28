@@ -6,6 +6,7 @@ package vaulttoken
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,6 +23,11 @@ const (
 	revokeTimeout = 10 * time.Second
 	maxBackoff    = 30 * time.Second
 )
+
+// errNonRenewable marks a role-shape misconfiguration: retrying the login
+// would mint another orphaned token, so callers must fail fast instead.
+var errNonRenewable = errors.New("vault returned a non-renewable token; " +
+	"the auth role must issue renewable service tokens (token_type=service, not batch)")
 
 // PushFunc delivers a freshly minted token to the target API.
 type PushFunc func(ctx context.Context, token, accessor string, ttlSeconds int) error
@@ -113,9 +119,13 @@ func (m *Manager) Run(ctx context.Context) error {
 
 		next, err := m.rotate(ctx)
 		if err != nil {
-			// Only possible when ctx was cancelled mid-rotation.
+			// Cancelled mid-rotation, or the role now issues non-renewable
+			// tokens (fatal: surface as a crash rather than retry forever).
 			m.revoke(secret)
-			return nil
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("rotation: %w", err)
 		}
 
 		// The replacement is live in the target; let the old token drain for
@@ -146,6 +156,10 @@ func (m *Manager) rotate(ctx context.Context) (*api.Secret, error) {
 				return secret, nil
 			}
 			m.revoke(secret)
+		} else if errors.Is(err, errNonRenewable) {
+			// Every retry would mint (and orphan, for batch tokens) another
+			// token against the misconfigured role.
+			return nil, err
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -197,8 +211,11 @@ func (m *Manager) login(ctx context.Context) (*api.Secret, error) {
 		m.client.SetToken(secret.Auth.ClientToken)
 	}
 	if !secret.Auth.Renewable {
-		return nil, fmt.Errorf("vault returned a non-renewable token; " +
-			"the auth role must issue renewable service tokens (token_type=service, not batch)")
+		// Vault has already issued this token: revoke it rather than orphan
+		// it. Best-effort — a batch token cannot revoke itself and dies at
+		// its TTL, which revoke() logs as a warning.
+		m.revoke(secret)
+		return nil, errNonRenewable
 	}
 	m.setExpiry(secret.Auth.LeaseDuration)
 	m.logger.Info("logged in to vault", "method", m.auth.Method, "accessor", secret.Auth.Accessor, "ttl_seconds", secret.Auth.LeaseDuration)

@@ -102,6 +102,36 @@ push {
 	}
 }
 
+func TestLoadRejectsDualCredentialsFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.hcl")
+	cfg := `
+vault {
+  address = "http://v:8200"
+  auth {
+    method = "jwt"
+    role   = "cp4d"
+  }
+}
+push {
+  url              = "http://t/api"
+  body_template    = "{{ .VaultToken }}"
+  credentials_file = "/etc/minter/credentials/credentials.json"
+  login {
+    url              = "http://t/login"
+    body_template    = "{}"
+    token_field      = "token"
+    credentials_file = "/etc/minter/credentials/credentials.json"
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Errorf("want dual credentials_file error, got %v", err)
+	}
+}
+
 func TestLoadRejectsMissingRequiredAttr(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.hcl")
 	if err := os.WriteFile(path, []byte(`vault { address = "http://v:8200" auth { method = "jwt" } }`), 0o600); err != nil {

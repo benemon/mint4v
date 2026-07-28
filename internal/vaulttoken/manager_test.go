@@ -25,14 +25,15 @@ import (
 // issued with a 2s TTL and each may be renewed maxRenews times before
 // renew-self starts failing, which forces the LifetimeWatcher to rotate.
 type fakeVault struct {
-	mu        sync.Mutex
-	logins    int
-	renews    map[string]int
-	revoked   []string
-	revokedNS []string
-	events    []string // ordered "renew <tok>" / "revoke <tok>" log
-	maxRenews int
-	jwtSeen   string
+	mu           sync.Mutex
+	logins       int
+	renews       map[string]int
+	revoked      []string
+	revokedNS    []string
+	events       []string // ordered "renew <tok>" / "revoke <tok>" log
+	maxRenews    int
+	jwtSeen      string
+	nonRenewable bool // issue non-renewable tokens from now on
 }
 
 func newFakeVault() *fakeVault {
@@ -45,13 +46,14 @@ func (f *fakeVault) handler() http.Handler {
 		f.mu.Lock()
 		f.logins++
 		n := f.logins
+		renewable := !f.nonRenewable
 		if strings.Contains(r.URL.Path, "/jwt/") {
 			var body map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.jwtSeen = body["jwt"]
 		}
 		f.mu.Unlock()
-		writeAuth(w, fmt.Sprintf("tok-%d", n), fmt.Sprintf("acc-%d", n))
+		writeAuth(w, fmt.Sprintf("tok-%d", n), fmt.Sprintf("acc-%d", n), renewable)
 	}
 	mux.HandleFunc("/v1/auth/kubernetes/login", login)
 	mux.HandleFunc("/v1/auth/jwt/login", login)
@@ -69,7 +71,7 @@ func (f *fakeVault) handler() http.Handler {
 			fmt.Fprint(w, `{"errors":["token is past its max TTL"]}`)
 			return
 		}
-		writeAuth(w, token, "acc-renewed")
+		writeAuth(w, token, "acc-renewed", true)
 	})
 	mux.HandleFunc("/v1/auth/token/revoke-self", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -82,12 +84,12 @@ func (f *fakeVault) handler() http.Handler {
 	return mux
 }
 
-func writeAuth(w http.ResponseWriter, token, accessor string) {
+func writeAuth(w http.ResponseWriter, token, accessor string, renewable bool) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"auth": map[string]any{
 			"client_token":   token,
 			"accessor":       accessor,
-			"renewable":      true,
+			"renewable":      renewable,
 			"lease_duration": 2,
 		},
 	})
@@ -332,10 +334,20 @@ func TestReplacementWatchedDuringGrace(t *testing.T) {
 }
 
 // runAgainstCannedLogin runs a jwt-auth manager against a server that always
-// answers login with the given body, returning Run's error.
-func runAgainstCannedLogin(t *testing.T, loginBody string) error {
+// answers login with the given body, returning Run's error and the tokens
+// the manager revoked.
+func runAgainstCannedLogin(t *testing.T, loginBody string) (error, []string) {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var mu sync.Mutex
+	var revoked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/revoke-self") {
+			mu.Lock()
+			revoked = append(revoked, r.Header.Get("X-Vault-Token"))
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		fmt.Fprint(w, loginBody)
 	}))
 	t.Cleanup(srv.Close)
@@ -352,14 +364,22 @@ func runAgainstCannedLogin(t *testing.T, loginBody string) error {
 	}
 	m := NewManager(client, config.Auth{Method: "jwt", MountPath: "jwt", Role: "r", TokenFile: tokenFile},
 		time.Second, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	return m.Run(context.Background())
+	err = m.Run(context.Background())
+	mu.Lock()
+	defer mu.Unlock()
+	return err, append([]string(nil), revoked...)
 }
 
+// A non-renewable token must be rejected AND revoked: Vault already issued
+// it, so returning without cleanup would orphan one token per retry.
 func TestLoginRejectsNonRenewableToken(t *testing.T) {
-	err := runAgainstCannedLogin(t,
+	err, revoked := runAgainstCannedLogin(t,
 		`{"auth":{"client_token":"b.batch","accessor":"acc","renewable":false,"lease_duration":60}}`)
 	if err == nil || !strings.Contains(err.Error(), "non-renewable") {
 		t.Fatalf("want non-renewable token error, got %v", err)
+	}
+	if len(revoked) != 1 || revoked[0] != "b.batch" {
+		t.Errorf("rejected token should be revoked, revoked=%v", revoked)
 	}
 }
 
@@ -371,9 +391,58 @@ func TestLoginRejectsAuthlessResponse(t *testing.T) {
 		`{"auth":null}`,
 		`{"auth":{"client_token":"","accessor":"acc","renewable":true,"lease_duration":60}}`,
 	} {
-		err := runAgainstCannedLogin(t, body)
+		err, _ := runAgainstCannedLogin(t, body)
 		if err == nil || !strings.Contains(err.Error(), "no auth data") {
 			t.Errorf("login body %s: want no-auth-data error, got %v", body, err)
+		}
+	}
+}
+
+// If the role starts issuing non-renewable tokens mid-life, rotation must
+// fail fast (one revoked mint, Run returns an error) instead of minting an
+// orphan on every backoff retry.
+func TestRotationFailsFastOnNonRenewableToken(t *testing.T) {
+	fake := newFakeVault()
+	rec := &pushRecorder{}
+	m := newTestManager(t, fake, "kubernetes", rec.push)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+
+	waitFor(t, 5*time.Second, func() bool { return len(rec.tokens()) == 1 }, "initial push")
+	fake.mu.Lock()
+	fake.nonRenewable = true
+	fake.mu.Unlock()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "non-renewable") {
+			t.Fatalf("want non-renewable rotation error, got %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run did not fail fast on a non-renewable rotation")
+	}
+
+	// Exactly one extra mint (tok-2, revoked), not one per retry; and the
+	// working token (tok-1) is revoked on the way out.
+	fake.mu.Lock()
+	logins := fake.logins
+	fake.mu.Unlock()
+	if logins != 2 {
+		t.Errorf("expected exactly 2 logins (initial + failed rotation), got %d", logins)
+	}
+	revoked := fake.revokedTokens()
+	for _, want := range []string{"tok-1", "tok-2"} {
+		found := false
+		for _, r := range revoked {
+			if r == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s should be revoked, revoked=%v", want, revoked)
 		}
 	}
 }

@@ -126,7 +126,8 @@ test-e2e-external: ## Run the e2e suite against the current kubeconfig cluster a
 	@test -n "$(E2E_VAULT_ADDR)" || { echo "E2E_VAULT_ADDR is required"; exit 1; }
 	@test -n "$(E2E_VAULT_TOKEN)" || { echo "E2E_VAULT_TOKEN is required"; exit 1; }
 	@test -n "$(E2E_KUBERNETES_HOST)" || { echo "E2E_KUBERNETES_HOST is required"; exit 1; }
-	E2E_EXTERNAL=true E2E_NAMESPACE=$(E2E_NAMESPACE) \
+# @-silenced: the recipe carries E2E_VAULT_TOKEN, keep it out of make's echo.
+	@E2E_EXTERNAL=true E2E_NAMESPACE=$(E2E_NAMESPACE) \
 		E2E_IMG=$(E2E_IMG) E2E_MOCK_IMG=$(E2E_MOCK_IMG) \
 		E2E_VAULT_ADDR=$(E2E_VAULT_ADDR) E2E_VAULT_TOKEN=$(E2E_VAULT_TOKEN) \
 		E2E_VAULT_NAMESPACE=$(E2E_VAULT_NAMESPACE) E2E_KUBERNETES_HOST=$(E2E_KUBERNETES_HOST) \

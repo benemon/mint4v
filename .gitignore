@@ -1,0 +1,7 @@
+# Vendored IBM documentation — do not publish
+pdf/
+
+# Build and test output
+bin/
+cover.out
+*.log

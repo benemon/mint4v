@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          # Keep in sync with GOLANGCI_LINT_VERSION in the Makefile.
+          version: v2.12.2
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Unit tests
+        run: make test
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Helm lint and render
+        run: |
+          make helm-lint
+          helm template smoke charts/mint4v > /dev/null
+          helm template smoke charts/mint4v --set tokenSecretName=legacy --set tokenAudience="" \
+            --set vaultCASecret=vault-ca --set targetCASecret=target-ca --set credentialsSecret=creds > /dev/null
+          helm template smoke charts/mint4v --set vaultCA=pem --set targetCA=pem \
+            --set-string credentials=dummy > /dev/null
+          # Inline and existing-Secret forms are mutually exclusive; render must fail.
+          ! helm template smoke charts/mint4v --set vaultCA=pem --set vaultCASecret=other > /dev/null 2>&1

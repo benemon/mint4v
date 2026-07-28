@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mint4v.fullname" . }}
+  labels:
+    {{- include "mint4v.labels" . | nindent 4 }}
+spec:
+  # Exactly one minter: a second replica would race pushes and revocations.
+  # Recreate ensures the old pod revokes its token before the new one logs in.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "mint4v.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "mint4v.serviceAccountName" . }}
+      # The default token mount is replaced by an audience-bound projection.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: minter
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["-config", "/etc/minter/config.hcl"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: health
+              containerPort: {{ .Values.healthPort }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/minter
+              readOnly: true
+            - name: sa-token
+              mountPath: /var/run/secrets/minter
+              readOnly: true
+            {{- if or .Values.credentialsSecret .Values.credentials }}
+            - name: credentials
+              mountPath: /etc/minter/credentials
+              readOnly: true
+            {{- end }}
+            {{- if or .Values.vaultCASecret .Values.vaultCA }}
+            - name: vault-ca
+              mountPath: /etc/minter/tls/vault
+              readOnly: true
+            {{- end }}
+            {{- if or .Values.targetCASecret .Values.targetCA }}
+            - name: target-ca
+              mountPath: /etc/minter/tls/target
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "mint4v.fullname" . }}
+        - name: sa-token
+          {{- if .Values.tokenSecretName }}
+          secret:
+            secretName: {{ .Values.tokenSecretName }}
+            items:
+              - key: token
+                path: token
+          {{- else }}
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  {{- with .Values.tokenAudience }}
+                  audience: {{ . }}
+                  {{- end }}
+                  expirationSeconds: {{ .Values.tokenExpirationSeconds }}
+          {{- end }}
+        {{- if or .Values.credentialsSecret .Values.credentials }}
+        - name: credentials
+          secret:
+            secretName: {{ include "mint4v.credentialsSecretName" . }}
+        {{- end }}
+        {{- if or .Values.vaultCASecret .Values.vaultCA }}
+        - name: vault-ca
+          secret:
+            secretName: {{ include "mint4v.vaultCASecretName" . }}
+        {{- end }}
+        {{- if or .Values.targetCASecret .Values.targetCA }}
+        - name: target-ca
+          secret:
+            secretName: {{ include "mint4v.targetCASecretName" . }}
+        {{- end }}

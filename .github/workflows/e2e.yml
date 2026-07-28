@@ -1,0 +1,31 @@
+name: E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+          version: v0.24.0
+      - name: Run e2e suite (KIND + real Vault + mock CP4D)
+        run: make test-e2e
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl -n mint4v-e2e describe pods || true
+          kubectl -n mint4v-e2e logs deployment/mint4v --tail=100 || true
+          kubectl -n mint4v-e2e logs deployment/mockcpd --tail=50 || true

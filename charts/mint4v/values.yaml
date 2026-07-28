@@ -1,0 +1,107 @@
+image:
+  repository: mint4v
+  tag: dev
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  # The ServiceAccount whose token authenticates to Vault. Its name/namespace
+  # must match the Vault auth role's bound_service_account_names/_namespaces.
+  create: true
+  name: ""
+
+# Audience and lifetime of the projected ServiceAccount token, mounted at
+# /var/run/secrets/minter/token. The audience must match the Vault role's
+# `audience` (kubernetes auth) or `bound_audiences` (jwt auth). Set audience
+# to "" for a default (apiserver) audience token — required when the client
+# JWT itself performs the TokenReview (reviewer-less mount with
+# disable_local_ca_jwt=true and auth-delegator on this ServiceAccount).
+tokenAudience: vault
+tokenExpirationSeconds: 600
+
+# Mount a long-lived legacy token Secret (type kubernetes.io/service-account-token)
+# at the same path instead of the projection. Leave empty to use the
+# projected (ephemeral) token, which is the recommended default.
+tokenSecretName: ""
+
+# CA bundles for the Vault and target connections. Two forms, mutually
+# exclusive per item; leave both empty when the endpoint's CA is publicly
+# trusted:
+#   - *CASecret: name of an existing Secret, mounted whole — a cert-manager
+#     CA Secret's ca.crt appears at /etc/minter/tls/<vault|target>/ca.crt.
+#   - *CA: inline PEM; the chart creates a Secret with the bundle under the
+#     key ca.crt, mounted at the same path.
+# Either way, ca_cert_file in the config points at the mounted path.
+vaultCASecret: ""
+vaultCA: ""
+targetCASecret: ""
+targetCA: ""
+
+# Credential for the pre-login step, mounted at
+# /etc/minter/credentials/credentials.json. Two forms, mutually exclusive;
+# leave both empty to disable the mount:
+#   - credentialsSecret: name of an existing Secret holding a
+#     credentials.json key (e.g. synced by the Vault Secrets Operator).
+#   - credentials: inline JSON; the chart creates the Secret. Note the value
+#     then lives in your values file and the Helm release Secret — prefer
+#     credentialsSecret for anything beyond a lab.
+credentialsSecret: ""
+credentials: ""
+
+# Port the /healthz endpoint listens on; must match health_address in config.
+healthPort: 8080
+
+# The complete mint4v configuration, mounted at /etc/minter/config.hcl.
+# Templates are inline HCL heredocs. File paths refer to the chart's mounts:
+#   /var/run/secrets/minter/token              ServiceAccount token
+#   /etc/minter/credentials/credentials.json   credentialsSecret
+#   /etc/minter/tls/vault/<key>                vaultCASecret
+#   /etc/minter/tls/target/<key>               targetCASecret
+config: |
+  vault {
+    address = "https://vault.example.com:8200"
+    # ca_cert_file = "/etc/minter/tls/vault/ca.crt"
+
+    auth {
+      method     = "kubernetes"
+      role       = "cp4d"
+      token_file = "/var/run/secrets/minter/token"
+    }
+  }
+
+  push {
+    # CP4D vault update API; validate_and_save makes CP4D test the pushed
+    # token against Vault before saving it.
+    url    = "https://cpd.example.com/zen-data/v2/vaults/1000330999:my-vault?validate_and_save=true"
+    method = "PATCH"
+    # ca_cert_file = "/etc/minter/tls/target/ca.crt"
+
+    headers = {
+      "Content-Type" = "application/json"
+    }
+
+    extra = {
+      vault_address = "https://vault.example.com:8200"
+    }
+
+    body_template = <<-EOT
+      {"details":{"vault_address":"{{ .Extra.vault_address }}","access_token":"{{ .VaultToken }}"}}
+    EOT
+
+    login {
+      url         = "https://cpd.example.com/icp4d-api/v1/authorize"
+      token_field = "token"
+
+      body_template = <<-EOT
+        {"username":"{{ .Credentials.username }}","api_key":"{{ .Credentials.api_key }}"}
+      EOT
+
+      credentials_file = "/etc/minter/credentials/credentials.json"
+    }
+  }
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 64Mi

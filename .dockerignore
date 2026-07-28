@@ -1,0 +1,5 @@
+bin/
+charts/
+examples/
+*.md
+cover.out

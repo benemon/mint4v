@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 220" width="240" height="220">
+  <!-- A really bad hand-drawn sketch of a generic mint with a hole in it. -->
+  <g fill="none" stroke="#3a3a3a" stroke-linecap="round" stroke-linejoin="round">
+    <!-- outer ring, drawn twice like someone going over their own line -->
+    <path stroke-width="3.2" d="M120,28
+      C165,25 196,52 201,90
+      C207,131 184,168 141,178
+      C97,188 52,168 41,127
+      C30,88 55,44 98,31
+      C105,29 113,28 120,28 Z"/>
+    <path stroke-width="1.6" opacity="0.7" d="M118,34
+      C160,30 190,57 196,92
+      C202,128 179,163 139,172
+      C99,182 58,163 48,126
+      C38,91 61,50 100,37
+      C106,35 112,34 118,34 Z"/>
+    <!-- the hole, slightly off-centre because of course it is -->
+    <path stroke-width="3" d="M121,83
+      C138,82 151,94 150,110
+      C149,127 135,138 119,137
+      C102,136 90,123 92,107
+      C94,92 106,84 121,83 Z"/>
+    <path stroke-width="1.4" opacity="0.7" d="M120,89
+      C133,88 144,98 143,110
+      C142,123 132,131 120,130
+      C107,129 98,119 100,107
+      C101,96 109,90 120,89 Z"/>
+    <!-- sketchy shading hatches on the ring -->
+    <g stroke-width="1.4" opacity="0.55">
+      <path d="M62,64 l-12,14"/>
+      <path d="M74,54 l-13,15"/>
+      <path d="M88,46 l-12,14"/>
+      <path d="M170,58 l11,13"/>
+      <path d="M180,72 l11,12"/>
+      <path d="M64,148 l-11,10"/>
+      <path d="M78,158 l-9,11"/>
+      <path d="M155,163 l8,12"/>
+    </g>
+    <!-- a crumb that fell off -->
+    <path stroke-width="2" d="M206,178 c5,-2 9,2 7,7 c-2,5 -9,4 -10,-1 c-1,-4 0,-5 3,-6 Z"/>
+    <!-- an arrow because the artist worried you would not get it -->
+    <path stroke-width="1.6" opacity="0.8" d="M186,26 c14,10 20,22 21,36"/>
+    <path stroke-width="1.6" opacity="0.8" d="M203,55 l4,9 l-9,-3"/>
+    <text x="150" y="20" font-family="Comic Sans MS, Chalkboard SE, cursive" font-size="13" fill="#3a3a3a" stroke="none">a mint</text>
+  </g>
+</svg>

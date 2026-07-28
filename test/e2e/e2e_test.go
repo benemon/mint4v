@@ -60,7 +60,7 @@ var (
 	activeVaultClient *api.Client
 
 	// deployVaultNamespace, when set, adds a namespace attribute to the
-	// minter's vault block (used by the Enterprise namespace context).
+	// mint4v's vault block (used by the Enterprise namespace context).
 	deployVaultNamespace string
 
 	// caPEM and reviewerJWT are captured in BeforeAll for reuse by later
@@ -255,11 +255,11 @@ func splitImage(image string) (repo, tag string) {
 	return image[:i], image[i+1:]
 }
 
-// minterValues renders the chart values for a given auth method and mount.
+// mint4vValues renders the chart values for a given auth method and mount.
 // chartExtras is appended verbatim as extra top-level values (e.g. to switch
 // the token source).
-func minterValues(method, mount, chartExtras string) string {
-	repo, tag := splitImage(minterImage)
+func mint4vValues(method, mount, chartExtras string) string {
+	repo, tag := splitImage(mint4vImage)
 	pullPolicy := "Never"
 	if external {
 		// The external images are mutable :latest tags in a registry;
@@ -280,7 +280,7 @@ func minterValues(method, mount, chartExtras string) string {
 		if caFile := os.Getenv("VAULT_CACERT"); caFile != "" {
 			ca, err := os.ReadFile(caFile)
 			Expect(err).NotTo(HaveOccurred())
-			vaultBlockExtra += "\n    ca_cert = \"/etc/minter/tls/vault/ca.crt\""
+			vaultBlockExtra += "\n    ca_cert = \"/etc/mint4v/tls/vault/ca.crt\""
 			valuesExtra += "vaultCA: |\n" + indent(string(ca), "  ") + "\n"
 		}
 	}
@@ -305,12 +305,12 @@ config: |
     auth "%[2]s" {
       mount_path = "%[4]s"
       role       = "mint4v"
-      token_path = "/var/run/secrets/minter/token"
+      token_path = "/var/run/secrets/mint4v/token"
     }
   }
 
   credentials {
-    file = "/etc/minter/credentials/credentials.json"
+    file = "/etc/mint4v/credentials/credentials.json"
   }
 
   target {
@@ -350,7 +350,7 @@ func indentHCL(s string) string {
 
 func helmDeploy(method, mount, chartExtras string) {
 	values := filepath.Join(GinkgoT().TempDir(), "values.yaml")
-	ExpectWithOffset(1, os.WriteFile(values, []byte(minterValues(method, mount, chartExtras)), 0o600)).To(Succeed())
+	ExpectWithOffset(1, os.WriteFile(values, []byte(mint4vValues(method, mount, chartExtras)), 0o600)).To(Succeed())
 	_, err := utils.Run(exec.Command("helm", "upgrade", "--install", releaseName, "charts/mint4v",
 		"-n", namespace, "-f", values, "--wait", "--timeout", "3m"))
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
@@ -590,7 +590,7 @@ subjects:
 
 		// External-Vault semantics: disable_local_ca_jwt=true and no
 		// reviewer JWT, so the CLIENT's login JWT performs its own
-		// TokenReview (auth-delegator CRB on the minter SA above).
+		// TokenReview (auth-delegator CRB on the mint4v SA above).
 		By("configuring an external-style kubernetes auth mount (client JWT self-review)")
 		enableAuth(mountPath("kubernetes-external"), "kubernetes")
 		vaultWrite("auth/"+mountPath("kubernetes-external")+"/config", map[string]any{
@@ -723,7 +723,7 @@ subjects:
 				Skip("self-review requires an in-cluster Vault")
 			}
 
-			By("minting a long-lived legacy token Secret for the minter's ServiceAccount")
+			By("minting a long-lived legacy token Secret for mint4v's ServiceAccount")
 			Expect(utils.KubectlApplyStdin(fmt.Sprintf(`
 apiVersion: v1
 kind: Secret

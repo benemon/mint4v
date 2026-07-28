@@ -32,7 +32,7 @@ the e2e suite are built around. The mock CP4D used in e2e implements the real
 contract — `/icp4d-api/v1/authorize` and `PATCH /zen-data/v2/vaults/<urn>`,
 including token validation against Vault when `validate_and_save=true`.
 
-**Exactly one replica.** A second minter would push competing tokens and
+**Exactly one replica.** A second mint4v instance would push competing tokens and
 revoke its peer's. The chart hardcodes `replicas: 1` with a
 [`Recreate` strategy](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)
 so the old pod revokes before the new one logs in. There is no HA mode and
@@ -70,7 +70,7 @@ renewable
 - Go 1.26+ (development only)
 - Docker, kind, and Helm (e2e only); `oc` for the OpenShift in-cluster
   build scenario
-- A Vault auth role (`kubernetes` or `jwt` method) bound to the minter's
+- A Vault auth role (`kubernetes` or `jwt` method) bound to mint4v's
   ServiceAccount
 - A CP4D user with vault-administration permission
 
@@ -133,11 +133,11 @@ follows.
 
 The configuration is one HCL file, templates included. The chart mounts
 everything it references at fixed paths: the config from a ConfigMap at
-`/etc/minter/config.hcl`, optional CA-bundle Secrets at
-`/etc/minter/tls/vault/` and `/etc/minter/tls/target/`, an optional
-credentials Secret at `/etc/minter/credentials/`, and a
+`/etc/mint4v/config.hcl`, optional CA-bundle Secrets at
+`/etc/mint4v/tls/vault/` and `/etc/mint4v/tls/target/`, an optional
+credentials Secret at `/etc/mint4v/credentials/`, and a
 [projected ServiceAccount token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken)
-at `/var/run/secrets/minter/token`. Each mounted item takes either the name
+at `/var/run/secrets/mint4v/token`. Each mounted item takes either the name
 of an existing Secret (`vaultCASecret`, `targetCASecret`,
 `credentialsSecret`) or an inline literal (`vaultCA`, `targetCA`,
 `credentials`) that the chart materializes as a Secret itself — the two
@@ -190,7 +190,7 @@ The block label selects the auth method:
 |-------|---------|-------------|
 | `role` | | Vault auth role (required) |
 | `mount_path` | method name | Auth mount path |
-| `token_path` | in-pod SA token path | ServiceAccount token file. The chart mounts a [projected token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) at `/var/run/secrets/minter/token` |
+| `token_path` | in-pod SA token path | ServiceAccount token file. The chart mounts a [projected token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) at `/var/run/secrets/mint4v/token` |
 
 ### `credentials` (optional block)
 
@@ -488,7 +488,7 @@ E2E_MOCK_IMG=image-registry.openshift-image-registry.svc:5000/mint4v-e2e/mockcpd
 go test ./test/e2e/ -v -ginkgo.v -timeout=30m
 ```
 
-Optional: `VAULT_CACERT` (also delivered to the minter as its Vault CA),
+Optional: `VAULT_CACERT` (also delivered to mint4v as its Vault CA),
 `E2E_KUBERNETES_CA_FILE` (defaults to the kubeconfig's CA),
 `E2E_NAMESPACE`, `E2E_IMG`/`E2E_MOCK_IMG`, and `E2E_KEEP=true` to leave the
 deployment running afterwards. In external mode, Vault mounts are prefixed

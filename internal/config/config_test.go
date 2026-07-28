@@ -24,10 +24,10 @@ func TestLoadFull(t *testing.T) {
 	if got := cfg.Vault.RevokeGraceDuration(); got != 10*time.Second {
 		t.Errorf("revoke grace: got %v", got)
 	}
-	if cfg.Vault.Auth.Method != "jwt" || cfg.Vault.Auth.MountPath != "jwt-ocp" || cfg.Vault.Auth.TokenPath != "/var/run/secrets/minter/token" {
+	if cfg.Vault.Auth.Method != "jwt" || cfg.Vault.Auth.MountPath != "jwt-ocp" || cfg.Vault.Auth.TokenPath != "/var/run/secrets/mint4v/token" {
 		t.Errorf("auth: got %+v", cfg.Vault.Auth)
 	}
-	if cfg.CredentialsFile() != "/etc/minter/credentials/credentials.json" {
+	if cfg.CredentialsFile() != "/etc/mint4v/credentials/credentials.json" {
 		t.Errorf("credentials file: got %q", cfg.CredentialsFile())
 	}
 	if cfg.Target.Method != "PUT" {

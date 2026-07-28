@@ -1,4 +1,4 @@
-// Package config loads and validates the minter's HCL configuration file.
+// Package config loads and validates the mint4v HCL configuration file.
 //
 // The schema is three blocks naming the three things involved: vault (where
 // tokens come from), credentials (what authenticates to the target), and

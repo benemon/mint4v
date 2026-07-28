@@ -1,29 +1,29 @@
 # CP4D against an external Vault Enterprise: the jwt auth method validates
 # the ServiceAccount token cryptographically (JWKS/static pubkeys), so Vault
 # never needs to reach the cluster's API server and no auth-delegator RBAC
-# is required. The role's bound_subject must name the minter's identity:
+# is required. The role's bound_subject must name mint4v's identity:
 # system:serviceaccount:<namespace>:mint4v.
 
 vault {
   address   = "https://vault.example.com:8200"
   namespace = "team-a"
-  ca_cert   = "/etc/minter/tls/vault/ca.crt"
+  ca_cert   = "/etc/mint4v/tls/vault/ca.crt"
 
   auth "jwt" {
     mount_path = "jwt-ocp"
     role       = "cp4d"
-    token_path = "/var/run/secrets/minter/token"
+    token_path = "/var/run/secrets/mint4v/token"
   }
 }
 
 credentials {
-  file = "/etc/minter/credentials/credentials.json"
+  file = "/etc/mint4v/credentials/credentials.json"
 }
 
 target {
   url     = "https://cpd.example.com/zen-data/v2/vaults/1000330999:my-vault?validate_and_save=true"
   method  = "PATCH"
-  ca_cert = "/etc/minter/tls/target/ca.crt"
+  ca_cert = "/etc/mint4v/tls/target/ca.crt"
 
   headers = {
     "Content-Type" = "application/json"

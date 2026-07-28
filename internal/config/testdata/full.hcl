@@ -4,24 +4,24 @@ health_address = ":9090"
 vault {
   address      = "https://vault.example.com:8200"
   namespace    = "admin/infra"
-  ca_cert      = "/etc/minter/tls/vault-ca.pem"
+  ca_cert      = "/etc/mint4v/tls/vault-ca.pem"
   revoke_grace = "10s"
 
   auth "jwt" {
     mount_path = "jwt-ocp"
     role       = "cp4d"
-    token_path = "/var/run/secrets/minter/token"
+    token_path = "/var/run/secrets/mint4v/token"
   }
 }
 
 credentials {
-  file = "/etc/minter/credentials/credentials.json"
+  file = "/etc/mint4v/credentials/credentials.json"
 }
 
 target {
   url           = "https://cpd.example.com/zen-data/v2/vaults/1"
   method        = "put"
-  ca_cert       = "/etc/minter/tls/target-ca.pem"
+  ca_cert       = "/etc/mint4v/tls/target-ca.pem"
   body_template = <<-EOT
     {"details":{"vault_address":"{{ .Extra.vault_id }}","access_token":"{{ .VaultToken }}"}}
   EOT

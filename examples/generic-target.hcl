@@ -14,7 +14,7 @@ vault {
 }
 
 credentials {
-  file = "/etc/minter/credentials/credentials.json"
+  file = "/etc/mint4v/credentials/credentials.json"
 }
 
 target {

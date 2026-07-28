@@ -3,7 +3,7 @@
 Reference configurations for common usage profiles — the HCL equivalent of
 CRD samples. They are not deployable as-is: hostnames, URNs, roles, and
 credentials are placeholders, and file paths assume the Helm chart's mounts
-(`/etc/minter/...`, `/var/run/secrets/minter/token`). See the
+(`/etc/mint4v/...`, `/var/run/secrets/mint4v/token`). See the
 [configuration reference](../README.md#configuration-reference).
 
 Every example is parse-validated by the unit test suite, so they cannot

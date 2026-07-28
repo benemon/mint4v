@@ -6,7 +6,7 @@
 
 vault {
   address = "https://vault.example.com:8200"
-  ca_cert = "/etc/minter/tls/vault/ca.crt"
+  ca_cert = "/etc/mint4v/tls/vault/ca.crt"
 
   auth "kubernetes" {
     role = "cp4d"
@@ -14,7 +14,7 @@ vault {
 }
 
 credentials {
-  file = "/etc/minter/credentials/credentials.json"
+  file = "/etc/mint4v/credentials/credentials.json"
 }
 
 target {

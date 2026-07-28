@@ -29,6 +29,7 @@ type fakeVault struct {
 	logins    int
 	renews    map[string]int
 	revoked   []string
+	revokedNS []string
 	maxRenews int
 	jwtSeen   string
 }
@@ -69,6 +70,7 @@ func (f *fakeVault) handler() http.Handler {
 	mux.HandleFunc("/v1/auth/token/revoke-self", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.revoked = append(f.revoked, r.Header.Get("X-Vault-Token"))
+		f.revokedNS = append(f.revokedNS, r.Header.Get("X-Vault-Namespace"))
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -298,5 +300,46 @@ func TestLoginRejectsNonRenewableToken(t *testing.T) {
 
 	if err := m.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "non-renewable") {
 		t.Fatalf("want non-renewable token error, got %v", err)
+	}
+}
+
+// The Vault Enterprise namespace travels in the X-Vault-Namespace header; a
+// revocation that drops it would target the wrong namespace and silently
+// revoke nothing. Guards the CloneWithHeaders usage in revoke.
+func TestRevokePreservesNamespaceHeader(t *testing.T) {
+	fake := newFakeVault()
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+
+	vc := api.DefaultConfig()
+	vc.Address = srv.URL
+	client, err := api.NewClient(vc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetNamespace("infra/claude")
+
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte("sa-jwt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := &pushRecorder{}
+	m := NewManager(client, config.Auth{Method: "jwt", MountPath: "jwt", Role: "cp4d", TokenFile: tokenFile},
+		50*time.Millisecond, rec.push, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+
+	waitFor(t, 5*time.Second, func() bool { return len(rec.tokens()) >= 1 }, "initial push")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.revokedNS) == 0 || fake.revokedNS[len(fake.revokedNS)-1] != "infra/claude" {
+		t.Errorf("revocation dropped the namespace header; got %v", fake.revokedNS)
 	}
 }

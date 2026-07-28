@@ -10,6 +10,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -36,6 +37,11 @@ func main() {
 	var lastPushAt time.Time
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
+	if os.Getenv("MOCK_TLS_SKIP_VERIFY") == "true" {
+		// Test mock only: allows validate_and_save against a TLS Vault
+		// without mounting a CA bundle.
+		httpClient.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
 
 	mux := http.NewServeMux()
 

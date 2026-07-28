@@ -24,13 +24,25 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Unit tests
-        run: make test
+        run: make test JUNIT_REPORT=unit.xml
+      - name: Publish test report
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        # Dependabot PRs run with a read-only token that cannot create
+        # check runs, so the report step is skipped for them.
+        if: ${{ always() && github.actor != 'dependabot[bot]' }}
+        with:
+          name: Unit Test Results
+          path: unit.xml
+          reporter: java-junit
 
   helm:
     runs-on: ubuntu-latest

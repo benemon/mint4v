@@ -66,12 +66,60 @@ renewable
 
 ## Getting started
 
-Build and deploy:
+There are three supported build-and-deploy scenarios. In every one, the
+values file is the only artifact you maintain — config, templates, CA
+references, and credentials in one place; leave `image.*` unset in it, the
+deployment step supplies the image reference. Each scenario is driven by
+make or by the equivalent raw CLI commands.
+
+**External build → Kubernetes or OpenShift.** Build and push to a registry
+the cluster can pull from, then deploy. The two platforms differ only in
+which kubeconfig you point at — the chart's pod spec satisfies the
+restricted profile on both:
 
 ```sh
-make docker-build IMG=<registry>/mint4v:<tag>
-helm install mint4v charts/mint4v -n <namespace> -f my-values.yaml
+make docker-build docker-push IMG=<registry>/mint4v:<tag>
+make deploy IMG=<registry>/mint4v:<tag> NAMESPACE=<namespace> VALUES=my-values.yaml
 ```
+
+```sh
+# equivalent CLI
+docker build -t <registry>/mint4v:<tag> . && docker push <registry>/mint4v:<tag>
+helm upgrade --install mint4v charts/mint4v -n <namespace> -f my-values.yaml \
+    --set image.repository=<registry>/mint4v --set image.tag=<tag>
+```
+
+**In-cluster OpenShift build → OpenShift.** No external registry: a
+[binary build](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/builds_using_buildconfig/creating-build-inputs#builds-binary-source_creating-build-inputs)
+lands the image in the internal registry, and the deploy references it. One
+target composes build, deploy, and a restart (the internal tag is mutable,
+so a restart is what picks up the new build):
+
+```sh
+make ocp-deploy NAMESPACE=<namespace> VALUES=my-values.yaml
+```
+
+```sh
+# equivalent CLI
+oc new-build --binary --strategy=docker --name=mint4v -n <namespace>   # once
+oc start-build mint4v -n <namespace> --from-dir=. --follow
+helm upgrade --install mint4v charts/mint4v -n <namespace> -f my-values.yaml \
+    --set image.repository=image-registry.openshift-image-registry.svc:5000/<namespace>/mint4v \
+    --set image.tag=latest --set image.pullPolicy=Always
+oc rollout restart deployment/mint4v -n <namespace>
+```
+
+`make ocp-build` is the build half on its own. The fourth cell of
+the matrix — in-cluster build, deployment elsewhere — is not supported: the
+internal registry is not pullable from outside the cluster.
+
+Two prerequisites no target can arrange for you: the namespace must exist
+(or your credentials must be able to create it — namespace-scoped admin
+cannot), and the Vault auth role must bind the *target* namespace's
+identity (`bound_service_account_namespaces` /
+`bound_subject: system:serviceaccount:<namespace>:mint4v`) — deploying the
+same values into a different namespace fails at login until the role
+follows.
 
 The configuration is one HCL file, templates included. The chart mounts
 everything it references at fixed paths: the config from a ConfigMap at
@@ -230,6 +278,12 @@ vault write auth/kubernetes/role/cp4d \
 The policy attached to this role is the blast radius of the whole system —
 scope it to exactly the paths CP4D reads.
 
+Do not use
+[periodic tokens](https://developer.hashicorp.com/vault/docs/concepts/tokens#periodic-tokens)
+(`token_period` on the role): they renew indefinitely and never reach a max
+TTL, so rotation never fires and the token becomes effectively permanent.
+`token_ttl` + `token_max_ttl` is the intended shape.
+
 For the [`jwt` method](https://developer.hashicorp.com/vault/docs/auth/jwt),
 Vault validates the SA token against the cluster's OIDC issuer instead of
 calling TokenReview — use it when Vault cannot reach the API server. One
@@ -268,18 +322,75 @@ make docker-build IMG=mint4v:dev
 make test-e2e    # KIND + real Vault + mock CP4D
 ```
 
+The make targets are thin wrappers over the standard tools; without make:
+
+```sh
+go build -o bin/mint4v ./cmd
+go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+helm lint charts/mint4v
+docker build -t mint4v:dev .
+```
+
+The one exception is the KIND e2e suite, which invokes `make docker-build`
+itself to build the images it loads — running it requires make. The
+external-cluster variant below is make-free.
+
 The e2e suite creates a kind cluster, deploys a dev-mode Vault and the mock
 CP4D API ([test/mockcpd](test/mockcpd/)), installs the chart, and asserts
 with deliberately short TTLs (1m/2m): the token is pushed and valid, renewed
 in place past its initial TTL without a re-push, rotated at max TTL with the
-old token revoked after the grace period, and revoked when the Deployment is
-scaled down — across all three kubernetes-auth TokenReview models and the
-jwt method.
+old token revoked after the grace period, recovered after an out-of-band
+revocation, and revoked when the Deployment is scaled down — across all
+three kubernetes-auth TokenReview models and the jwt method. With
+`VAULT_LICENSE` set, the dev Vault runs Vault Enterprise
+(`hashicorp/vault-enterprise:2.0-ent`) and a further spec proves the full
+lifecycle inside a Vault namespace; without a license that spec skips.
+
+The same suite can target an existing cluster (e.g. OpenShift) and an
+external Vault instead of provisioning KIND:
+
+```sh
+make ocp-build-e2e              # in-cluster binary builds via the internal registry
+make test-e2e-external \
+    E2E_VAULT_ADDR=https://vault.example.com:8200 \
+    E2E_VAULT_TOKEN=... \
+    E2E_VAULT_NAMESPACE=infra/claude \
+    E2E_KUBERNETES_HOST=https://api.cluster.example.com:6443
+```
+
+```sh
+# equivalent CLI (the env contract is the whole interface)
+E2E_EXTERNAL=true \
+E2E_VAULT_ADDR=https://vault.example.com:8200 \
+E2E_VAULT_TOKEN=... \
+E2E_VAULT_NAMESPACE=infra/claude \
+E2E_KUBERNETES_HOST=https://api.cluster.example.com:6443 \
+E2E_IMG=image-registry.openshift-image-registry.svc:5000/mint4v-e2e/mint4v:latest \
+E2E_MOCK_IMG=image-registry.openshift-image-registry.svc:5000/mint4v-e2e/mockcpd:latest \
+go test ./test/e2e/ -v -ginkgo.v -timeout=30m
+```
+
+Optional: `VAULT_CACERT` (also delivered to the minter as its Vault CA),
+`E2E_KUBERNETES_CA_FILE` (defaults to the kubeconfig's CA),
+`E2E_NAMESPACE`, `E2E_IMG`/`E2E_MOCK_IMG`, and `E2E_KEEP=true` to leave the
+deployment running afterwards. In external mode, Vault mounts are prefixed
+`mint4v-e2e-` and removed on cleanup; the self-review spec skips (it needs
+an in-cluster Vault), and jwt auth is configured from the cluster's JWKS via
+`jwt_validation_pubkeys` since the issuer is unreachable from an external
+Vault.
 
 CI: [ci.yml](.github/workflows/ci.yml) runs lint, unit tests, and chart
 checks on pushes to main and PRs; [e2e.yml](.github/workflows/e2e.yml) runs
-the full KIND suite on PRs. Both support `workflow_dispatch`. There is no
-release pipeline.
+the full KIND suite on PRs. Both support `workflow_dispatch` and publish
+JUnit reports as check runs (`JUNIT_REPORT=<file>` does the same locally).
+Dependabot watches Go modules and Actions weekly.
+
+Releases are tag-triggered (`v*`): [release.yml](.github/workflows/release.yml)
+re-runs the unit and e2e suites as gates, then publishes the mint4v
+binaries (linux/amd64, linux/arm64, darwin/arm64) and the packaged Helm
+chart versioned from the tag. Deliberately no container image is built or
+published — build your own with `make docker-build` (or `make ocp-build`)
+so image provenance stays in your hands.
 
 ## Threat model
 

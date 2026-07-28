@@ -3,6 +3,7 @@ name: E2E
 on:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -11,6 +12,9 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v7
@@ -21,7 +25,18 @@ jobs:
           install_only: true
           version: v0.24.0
       - name: Run e2e suite (KIND + real Vault + mock CP4D)
-        run: make test-e2e
+        env:
+          # Switches the dev Vault to Vault Enterprise and enables the
+          # namespace specs; without it those specs skip.
+          VAULT_LICENSE: ${{ secrets.VAULT_LICENSE }}
+        run: make test-e2e JUNIT_REPORT=e2e.xml
+      - name: Publish test report
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        if: ${{ always() && github.actor != 'dependabot[bot]' }}
+        with:
+          name: E2E Test Results
+          path: e2e.xml
+          reporter: java-junit
       - name: Diagnostics on failure
         if: failure()
         run: |

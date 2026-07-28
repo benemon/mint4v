@@ -182,8 +182,14 @@ One HCL file, passed as `-config /path/to/config.hcl`.
 
 ### `push.login` (optional block)
 
-Omit the block entirely if the target needs no authentication or a static
-header suffices.
+CP4D always authenticates — this block is one of the two ways to satisfy
+it. Include it for the Bearer session exchange against
+`/icp4d-api/v1/authorize`; omit it and put a static
+`Authorization = "ZenApiKey <base64 of username:apikey>"` in `push.headers`
+instead. See
+[Cloud Pak for Data integration](#cloud-pak-for-data-integration) for the
+trade-off. (Only a non-CP4D target with genuinely unauthenticated writes
+would omit both.)
 
 | Field | Default | Description |
 |-------|---------|-------------|

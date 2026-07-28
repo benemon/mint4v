@@ -43,13 +43,13 @@ func TestPushRendersTemplateAndHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(config.Push{
+	p, err := New(config.Target{
 		URL:          srv.URL,
 		Method:       "PUT",
 		BodyTemplate: `{"secret":"{{ .VaultToken }}","accessor":"{{ .Accessor }}","ttl":{{ .TTLSeconds }},"id":"{{ .Extra.vault_id }}"}`,
 		Headers:      map[string]string{"Content-Type": "application/json"},
 		Extra:        map[string]string{"vault_id": "42"},
-	}, discard())
+	}, "", discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -87,17 +87,16 @@ func TestPushWithPreLogin(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	p, err := New(config.Push{
+	p, err := New(config.Target{
 		URL:          srv.URL + "/push",
 		Method:       "POST",
 		BodyTemplate: `{"secret":"{{ .VaultToken }}"}`,
 		Login: &config.Login{
-			URL:             srv.URL + "/icp4d-api/v1/authorize",
-			BodyTemplate:    `{"username":"{{ .Credentials.username }}","api_key":"{{ .Credentials.api_key }}"}`,
-			TokenField:      "data.token",
-			CredentialsFile: writeFile(t, "credentials.json", `{"username":"admin","api_key":"k3y"}`),
+			URL:          srv.URL + "/icp4d-api/v1/authorize",
+			BodyTemplate: `{"username":"{{ .Credentials.username }}","api_key":"{{ .Credentials.api_key }}"}`,
+			TokenField:   "data.token",
 		},
-	}, discard())
+	}, writeFile(t, "credentials.json", `{"username":"admin","api_key":"k3y"}`), discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -125,7 +124,7 @@ func TestPushCustomCA(t *testing.T) {
 	tmpl := "{{ .VaultToken }}"
 
 	// Without the CA the push must fail TLS verification.
-	noCA, err := New(config.Push{URL: srv.URL, Method: "POST", BodyTemplate: tmpl}, discard())
+	noCA, err := New(config.Target{URL: srv.URL, Method: "POST", BodyTemplate: tmpl}, "", discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -133,12 +132,12 @@ func TestPushCustomCA(t *testing.T) {
 		t.Fatal("push without custom CA should fail TLS verification")
 	}
 
-	withCA, err := New(config.Push{
+	withCA, err := New(config.Target{
 		URL:          srv.URL,
 		Method:       "POST",
 		BodyTemplate: tmpl,
-		CACertFile:   writeFile(t, "ca.pem", caPEM),
-	}, discard())
+		CACert:       writeFile(t, "ca.pem", caPEM),
+	}, "", discard())
 	if err != nil {
 		t.Fatalf("New with CA: %v", err)
 	}
@@ -157,11 +156,11 @@ func TestPushErrorNeverContainsToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(config.Push{
+	p, err := New(config.Target{
 		URL:          srv.URL,
 		Method:       "POST",
 		BodyTemplate: `{"secret":"{{ .VaultToken }}","missing":"{{ .Extra.nope }}"}`,
-	}, discard())
+	}, "", discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -177,11 +176,11 @@ func TestPushErrorNeverContainsToken(t *testing.T) {
 	}
 
 	// HTTP failure path.
-	p2, err := New(config.Push{
+	p2, err := New(config.Target{
 		URL:          srv.URL,
 		Method:       "POST",
 		BodyTemplate: `{{ .VaultToken }}`,
-	}, discard())
+	}, "", discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -203,17 +202,16 @@ func TestLoginErrorNeverContainsCredentials(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(config.Push{
+	p, err := New(config.Target{
 		URL:          srv.URL,
 		Method:       "PATCH",
 		BodyTemplate: `{{ .VaultToken }}`,
 		Login: &config.Login{
-			URL:             srv.URL,
-			BodyTemplate:    `{"username":"{{ .Credentials.username }}","api_key":"{{ .Credentials.api_key }}"}`,
-			TokenField:      "token",
-			CredentialsFile: writeFile(t, "credentials.json", `{"username":"admin","api_key":"s3cr3t-key"}`),
+			URL:          srv.URL,
+			BodyTemplate: `{"username":"{{ .Credentials.username }}","api_key":"{{ .Credentials.api_key }}"}`,
+			TokenField:   "token",
 		},
-	}, discard())
+	}, writeFile(t, "credentials.json", `{"username":"admin","api_key":"s3cr3t-key"}`), discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -243,7 +241,7 @@ func TestPushRefusesRedirects(t *testing.T) {
 		})
 		srv := httptest.NewServer(mux)
 
-		p, err := New(config.Push{URL: srv.URL + "/moved", Method: "PATCH", BodyTemplate: `{{ .VaultToken }}`}, discard())
+		p, err := New(config.Target{URL: srv.URL + "/moved", Method: "PATCH", BodyTemplate: `{{ .VaultToken }}`}, "", discard())
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -258,7 +256,7 @@ func TestPushRefusesRedirects(t *testing.T) {
 		}
 
 		// A redirected pre-login must fail the whole push the same way.
-		p2, err := New(config.Push{
+		p2, err := New(config.Target{
 			URL:          srv.URL + "/elsewhere",
 			Method:       "PATCH",
 			BodyTemplate: `{{ .VaultToken }}`,
@@ -267,7 +265,7 @@ func TestPushRefusesRedirects(t *testing.T) {
 				BodyTemplate: `{}`,
 				TokenField:   "token",
 			},
-		}, discard())
+		}, "", discard())
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -289,16 +287,15 @@ func TestHeadersRenderFromCredentials(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(config.Push{
-		URL:             srv.URL,
-		Method:          "PATCH",
-		BodyTemplate:    `{{ .VaultToken }}`,
-		CredentialsFile: writeFile(t, "credentials.json", `{"zen_api_key":"emVuOmtleQ=="}`),
+	p, err := New(config.Target{
+		URL:          srv.URL,
+		Method:       "PATCH",
+		BodyTemplate: `{{ .VaultToken }}`,
 		Headers: map[string]string{
 			"Authorization": "ZenApiKey {{ .Credentials.zen_api_key }}",
 			"Content-Type":  "application/json",
 		},
-	}, discard())
+	}, writeFile(t, "credentials.json", `{"zen_api_key":"emVuOmtleQ=="}`), discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -311,12 +308,12 @@ func TestHeadersRenderFromCredentials(t *testing.T) {
 
 	// A header referencing a credential that does not exist must fail at
 	// construction, not silently render empty.
-	_, err = New(config.Push{
+	_, err = New(config.Target{
 		URL:          srv.URL,
 		Method:       "PATCH",
 		BodyTemplate: `{{ .VaultToken }}`,
 		Headers:      map[string]string{"Authorization": "ZenApiKey {{ .Credentials.absent }}"},
-	}, discard())
+	}, "", discard())
 	if err == nil {
 		t.Error("New should reject a header template referencing missing credentials")
 	}
@@ -333,12 +330,12 @@ func TestToJSONEscapesTemplatedValues(t *testing.T) {
 	defer srv.Close()
 
 	const hostile = `he said "hi" \ and 	 newline` + "\n"
-	p, err := New(config.Push{
+	p, err := New(config.Target{
 		URL:          srv.URL,
 		Method:       "POST",
 		BodyTemplate: `{"note":{{ toJSON .Extra.note }},"access_token":"{{ .VaultToken }}"}`,
 		Extra:        map[string]string{"note": hostile},
-	}, discard())
+	}, "", discard())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -362,12 +359,12 @@ func TestPreLoginRejectsBadResponses(t *testing.T) {
 			_, _ = io.WriteString(w, tc.body)
 		}))
 
-		p, err := New(config.Push{
+		p, err := New(config.Target{
 			URL:          srv.URL,
 			Method:       "POST",
 			BodyTemplate: `{}`,
 			Login:        &config.Login{URL: srv.URL, BodyTemplate: `{}`, TokenField: "token"},
-		}, discard())
+		}, "", discard())
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}

@@ -27,7 +27,7 @@ import (
 var (
 	external = os.Getenv("E2E_EXTERNAL") == "true"
 
-	minterImage = envOr("E2E_IMG", "mint4v:e2e")
+	mint4vImage = envOr("E2E_IMG", "mint4v:e2e")
 	mockImage   = envOr("E2E_MOCK_IMG", "mockcpd:e2e")
 )
 
@@ -53,7 +53,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	By("building the mint4v image")
-	_, err := utils.Run(exec.Command("make", "docker-build", "IMG="+minterImage))
+	_, err := utils.Run(exec.Command("make", "docker-build", "IMG="+mint4vImage))
 	Expect(err).NotTo(HaveOccurred())
 
 	By("building the mock CP4D image")
@@ -61,6 +61,6 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	By("loading images into the KIND cluster")
-	Expect(utils.LoadImageToKindCluster(minterImage)).To(Succeed())
+	Expect(utils.LoadImageToKindCluster(mint4vImage)).To(Succeed())
 	Expect(utils.LoadImageToKindCluster(mockImage)).To(Succeed())
 })

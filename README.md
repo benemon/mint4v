@@ -32,12 +32,17 @@ the e2e suite are built around. The mock CP4D used in e2e implements the real
 contract — `/icp4d-api/v1/authorize` and `PATCH /zen-data/v2/vaults/<urn>`,
 including token validation against Vault when `validate_and_save=true`.
 
-**Exactly one replica.** A second minter would push competing tokens and
+**Exactly one replica.** A second mint4v instance would push competing tokens and
 revoke its peer's. The chart hardcodes `replicas: 1` with a
 [`Recreate` strategy](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)
 so the old pod revokes before the new one logs in. There is no HA mode and
-none is planned: the failure window is bounded by pod restart time, during
-which CP4D's existing token keeps working.
+none is planned: the failure window is bounded by pod restart time. Note
+what that window means: on an orderly rollout the outgoing pod revokes its
+token on SIGTERM, so CP4D holds a dead token until the incoming pod pushes
+a fresh one — revoke-on-shutdown deliberately trades a brief integration
+gap for never leaving an orphaned live token behind. Only on an unclean
+kill (SIGKILL, node loss) does the existing token keep working, until its
+TTL.
 
 ## How it works
 
@@ -65,7 +70,7 @@ renewable
 - Go 1.26+ (development only)
 - Docker, kind, and Helm (e2e only); `oc` for the OpenShift in-cluster
   build scenario
-- A Vault auth role (`kubernetes` or `jwt` method) bound to the minter's
+- A Vault auth role (`kubernetes` or `jwt` method) bound to mint4v's
   ServiceAccount
 - A CP4D user with vault-administration permission
 
@@ -128,11 +133,11 @@ follows.
 
 The configuration is one HCL file, templates included. The chart mounts
 everything it references at fixed paths: the config from a ConfigMap at
-`/etc/minter/config.hcl`, optional CA-bundle Secrets at
-`/etc/minter/tls/vault/` and `/etc/minter/tls/target/`, an optional
-credentials Secret at `/etc/minter/credentials/`, and a
+`/etc/mint4v/config.hcl`, optional CA-bundle Secrets at
+`/etc/mint4v/tls/vault/` and `/etc/mint4v/tls/target/`, an optional
+credentials Secret at `/etc/mint4v/credentials/`, and a
 [projected ServiceAccount token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken)
-at `/var/run/secrets/minter/token`. Each mounted item takes either the name
+at `/var/run/secrets/mint4v/token`. Each mounted item takes either the name
 of an existing Secret (`vaultCASecret`, `targetCASecret`,
 `credentialsSecret`) or an inline literal (`vaultCA`, `targetCA`,
 `credentials`) that the chart materializes as a Secret itself — the two
@@ -147,7 +152,14 @@ reference.
 
 ## Configuration reference
 
-One HCL file, passed as `-config /path/to/config.hcl`.
+One HCL file, passed as `-config /path/to/config.hcl`. Three blocks name
+the three things involved: `vault` (where tokens come from), `credentials`
+(what authenticates to the target), and `target` (where tokens go). Block
+and attribute names follow
+[Vault Agent](https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent)
+vocabulary where the concepts coincide — see
+[docs/config-design.md](docs/config-design.md) for the rationale and the
+deliberate divergences.
 
 ### Top level
 
@@ -162,37 +174,47 @@ One HCL file, passed as `-config /path/to/config.hcl`.
 |-------|---------|-------------|
 | `address` | | Vault address (required) |
 | `namespace` | | [Vault Enterprise namespace](https://developer.hashicorp.com/vault/docs/enterprise/namespaces) |
-| `ca_cert_file` | | PEM bundle that **replaces** the trust pool for the Vault connection (a true pin — only this CA validates Vault), mounted from a Secret (`vaultCASecret` in the chart) |
+| `ca_cert` | | PEM bundle that **replaces** the trust pool for the Vault connection (a true pin — only this CA validates Vault), mounted from a Secret (`vaultCASecret` in the chart) |
 | — | | mTLS client certificates for Vault listeners that require them are not first-class config; the client honours `VAULT_CLIENT_CERT`/`VAULT_CLIENT_KEY` env vars, but this path is untested. All other `VAULT_*` environment variables are ignored: the config file is authoritative, so `VAULT_ADDR`, `VAULT_AGENT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE`, `VAULT_SKIP_VERIFY`, and `VAULT_TLS_SERVER_NAME` cannot reroute or weaken the connection |
 | `revoke_grace` | `30s` | How long the old token outlives its replacement after a rotation push |
 
-### `vault.auth`
+### `vault.auth` (labelled block)
+
+The block label selects the auth method:
+`auth "kubernetes" { ... }` for
+[kubernetes](https://developer.hashicorp.com/vault/docs/auth/kubernetes),
+`auth "jwt" { ... }` for
+[jwt](https://developer.hashicorp.com/vault/docs/auth/jwt).
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `method` | | [`kubernetes`](https://developer.hashicorp.com/vault/docs/auth/kubernetes) or [`jwt`](https://developer.hashicorp.com/vault/docs/auth/jwt) (required) |
 | `role` | | Vault auth role (required) |
 | `mount_path` | method name | Auth mount path |
-| `token_file` | in-pod SA token path | ServiceAccount token file. The chart mounts a [projected token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) at `/var/run/secrets/minter/token` |
+| `token_path` | in-pod SA token path | ServiceAccount token file. The chart mounts a [projected token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) at `/var/run/secrets/mint4v/token` |
 
-### `push`
+### `credentials` (optional block)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `file` | | Flat JSON object mounted from a Secret, exposed as `{{ .Credentials.* }}` to both target header templates and the login body template |
+
+### `target`
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `url` | | Target URL (required). For CP4D: `https://<host>/zen-data/v2/vaults/<urn>?validate_and_save=true` |
 | `method` | `POST` | HTTP method. CP4D vault updates use `PATCH` |
-| `ca_cert_file` | | PEM bundle for the target connection, mounted from a Secret (`targetCASecret` in the chart). Deliberately a separate pool from the Vault CA |
+| `ca_cert` | | PEM bundle for the target connection, mounted from a Secret (`targetCASecret` in the chart). Deliberately a separate pool from the Vault CA |
 | `body_template` | | Inline payload template, usually an [HCL heredoc](https://developer.hashicorp.com/terraform/language/expressions/strings#heredoc-strings) (required) |
-| `credentials_file` | | JSON object mounted from a Secret, exposed to header templates as `{{ .Credentials.* }}`. Mutually exclusive with `push.login.credentials_file` (one file feeds both) |
 | `headers` | | Request headers. Values are templates rendered once at startup with `{{ .Credentials.* }}`, so a secret-bearing header (e.g. a ZenApiKey) is sourced from the credentials Secret, never inlined in the ConfigMap-resident config |
 | `extra` | | Static key/values exposed to the payload template as `{{ .Extra.* }}` |
 
-### `push.login` (optional block)
+### `target.login` (optional block)
 
 CP4D always authenticates — this block is one of the two ways to satisfy
 it. Include it for the Bearer session exchange against
 `/icp4d-api/v1/authorize`; omit it and template the ZenApiKey into
-`push.headers` from `push.credentials_file` (e.g.
+`target.headers` from the `credentials` block (e.g.
 `Authorization = "ZenApiKey {{ .Credentials.zen_api_key }}"`) instead. See
 [Cloud Pak for Data integration](#cloud-pak-for-data-integration) for the
 trade-off. (Only a non-CP4D target with genuinely unauthenticated writes
@@ -203,13 +225,12 @@ would omit both.)
 | `url` | | Login endpoint. For CP4D: `https://<host>/icp4d-api/v1/authorize` |
 | `body_template` | | Inline login body template, rendered with `{{ .Credentials.* }}` |
 | `token_field` | | Dot-path to the bearer token in the JSON response (`token` for CP4D) |
-| `credentials_file` | | JSON object mounted from a Secret, exposed as `{{ .Credentials.* }}` |
 
 ### Templating
 
 Two inline Go [`text/template`](https://pkg.go.dev/text/template) strings
-drive everything mint4v sends. `push.body_template` renders the payload for
-every push — the initial one and each rotation. `push.login.body_template`,
+drive everything mint4v sends. `target.body_template` renders the payload
+for every push — the initial one and each rotation. `target.login.body_template`,
 when the `login` block is present, renders the pre-login body immediately
 before each push. Both are parsed once at startup, so a syntax error fails
 the process before it ever touches Vault; rendering happens per request.
@@ -223,19 +244,19 @@ Payload template:
 | `{{ .VaultToken }}` | string | the minted Vault service token — the secret being delivered |
 | `{{ .Accessor }}` | string | the token's accessor: safe to log or store, usable by a Vault administrator for lookup and revocation but never for authentication |
 | `{{ .TTLSeconds }}` | int | the token's TTL at mint time — a number, so leave it unquoted in JSON |
-| `{{ .Extra.<key> }}` | string | static values from `push.extra`, for anything the target wants alongside the token (the vault address, an integration id) |
+| `{{ .Extra.<key> }}` | string | static values from `target.extra`, for anything the target wants alongside the token (the vault address, an integration id) |
 
 Login template:
 
 | Variable | Type | Value |
 |----------|------|-------|
-| `{{ .Credentials.<key> }}` | string | keys of the flat JSON object read from `credentials_file` at startup |
+| `{{ .Credentials.<key> }}` | string | keys of the flat JSON object read from `credentials.file` at startup; also available to `target.headers` values |
 
 The data model is deliberately this small: one custom function (`toJSON`,
 which emits a value as a JSON literal — see [Escaping](#escaping)), no
 Sprig, no file access, no way to reach anything not listed. A template
 controls the shape of one HTTP body, nothing more — if the target needs
-another value, add it to `push.extra`; if it needs computation, do it
+another value, add it to `target.extra`; if it needs computation, do it
 before it reaches the config.
 
 #### Failure semantics
@@ -244,7 +265,9 @@ Templates run with
 [`missingkey=error`](https://pkg.go.dev/text/template#Template.Option): a
 reference to anything that does not exist — a typo, an `extra` key that was
 never defined, a credential key absent from the file — fails the render,
-and the push with it. A failed initial push is a crash loop, so
+and the push with it. One caveat: the `index` builtin does not go through
+that check, so `{{ index .Extra "absent" }}` renders a zero value instead
+of failing — always use the dotted form (`{{ .Extra.key }}`), which does. A failed initial push is a crash loop, so
 misconfiguration is loud rather than silently pushing a payload with an
 empty token field. Execution errors are reduced to the error string before
 logging, so the data being rendered — the token — cannot leak into logs;
@@ -304,7 +327,7 @@ CP4D tests the pushed token against Vault before saving it, so every
 rotation is verified end to end. The matching config:
 
 ```hcl
-push {
+target {
   url     = "https://cpd.example.com/zen-data/v2/vaults/1000330999:my-vault?validate_and_save=true"
   method  = "PATCH"
   headers = { "Content-Type" = "application/json" }
@@ -320,10 +343,10 @@ CP4D accepts two authentication styles, both supported:
 
 - **ZenApiKey** (static): omit the `login` block; store
   `{"zen_api_key": "<base64 of username:apikey>"}` in the credentials Secret,
-  point `push.credentials_file` at it, and set
+  point `credentials.file` at it, and set
   `Authorization = "ZenApiKey {{ .Credentials.zen_api_key }}"` in
-  `push.headers`. The key stays in Secret custody — never put the literal
-  value in `push.headers`, which lands in a ConfigMap.
+  `target.headers`. The key stays in Secret custody — never put the literal
+  value in `target.headers`, which lands in a ConfigMap.
 - **Bearer session token**: point the `login` block at
   `/icp4d-api/v1/authorize` with `token_field = "token"`. The exchange runs
   before each push; pushes happen once per rotation, so session-token expiry
@@ -428,14 +451,18 @@ external-cluster variant below is make-free.
 
 The e2e suite creates a kind cluster, deploys a dev-mode Vault and the mock
 CP4D API ([test/mockcpd](test/mockcpd/)), installs the chart, and asserts
-with deliberately short TTLs (1m/2m): the token is pushed and valid, renewed
-in place past its initial TTL without a re-push, rotated at max TTL with the
-old token revoked after the grace period, recovered after an out-of-band
-revocation, and revoked when the Deployment is scaled down — across all
-three kubernetes-auth TokenReview models and the jwt method. With
-`VAULT_LICENSE` set, the dev Vault runs Vault Enterprise
-(`hashicorp/vault-enterprise:2.0-ent`) and a further spec proves the full
-lifecycle inside a Vault namespace; without a license that spec skips.
+with deliberately short TTLs (1m/2m). Coverage is not uniform across trust
+models, and precisely: the reviewer-JWT kubernetes model carries the full
+lifecycle assertions — token pushed and valid, renewed in place past its
+initial TTL without a re-push, rotated at max TTL with the old token
+revoked after the grace period, recovered after an out-of-band revocation,
+and revoked when the Deployment is scaled down. The other trust models
+(self-review, client-JWT, and the jwt method) assert login plus one valid
+push — they exercise the auth path, not the lifecycle, which is
+model-independent code. With `VAULT_LICENSE` set, the dev Vault runs Vault
+Enterprise (`hashicorp/vault-enterprise:2.0-ent`) and a further spec proves
+the full mint/renew/rotate/revoke lifecycle inside a Vault namespace;
+without a license that spec skips.
 
 The same suite can target an existing cluster (e.g. OpenShift) and an
 external Vault instead of provisioning KIND:
@@ -461,7 +488,7 @@ E2E_MOCK_IMG=image-registry.openshift-image-registry.svc:5000/mint4v-e2e/mockcpd
 go test ./test/e2e/ -v -ginkgo.v -timeout=30m
 ```
 
-Optional: `VAULT_CACERT` (also delivered to the minter as its Vault CA),
+Optional: `VAULT_CACERT` (also delivered to mint4v as its Vault CA),
 `E2E_KUBERNETES_CA_FILE` (defaults to the kubeconfig's CA),
 `E2E_NAMESPACE`, `E2E_IMG`/`E2E_MOCK_IMG`, and `E2E_KEEP=true` to leave the
 deployment running afterwards. In external mode, Vault mounts are prefixed

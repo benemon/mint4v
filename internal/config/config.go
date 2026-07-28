@@ -1,4 +1,11 @@
-// Package config loads and validates the minter's HCL configuration file.
+// Package config loads and validates the mint4v HCL configuration file.
+//
+// The schema is three blocks naming the three things involved: vault (where
+// tokens come from), credentials (what authenticates to the target), and
+// target (where tokens go). Block and attribute names follow Vault Agent
+// vocabulary (ca_cert, token_path, labelled auth method blocks) so the
+// config reads familiarly to Vault operators; see docs/config-design.md for
+// the rationale and the deliberate divergences.
 package config
 
 import (
@@ -10,21 +17,22 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsimple"
 )
 
-const defaultServiceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+const defaultServiceAccountTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 // Config is the root of the HCL configuration file.
 type Config struct {
-	LogLevel      string `hcl:"log_level,optional"`
-	HealthAddress string `hcl:"health_address,optional"`
-	Vault         Vault  `hcl:"vault,block"`
-	Push          Push   `hcl:"push,block"`
+	LogLevel      string       `hcl:"log_level,optional"`
+	HealthAddress string       `hcl:"health_address,optional"`
+	Vault         Vault        `hcl:"vault,block"`
+	Credentials   *Credentials `hcl:"credentials,block"`
+	Target        Target       `hcl:"target,block"`
 }
 
 // Vault configures the connection to Vault and the token lifecycle.
 type Vault struct {
 	Address     string `hcl:"address"`
 	Namespace   string `hcl:"namespace,optional"`
-	CACertFile  string `hcl:"ca_cert_file,optional"`
+	CACert      string `hcl:"ca_cert,optional"`
 	RevokeGrace string `hcl:"revoke_grace,optional"`
 	Auth        Auth   `hcl:"auth,block"`
 
@@ -34,35 +42,41 @@ type Vault struct {
 // RevokeGraceDuration is the parsed revoke_grace value.
 func (v *Vault) RevokeGraceDuration() time.Duration { return v.revokeGrace }
 
-// Auth selects and configures the Vault auth method used to log in.
+// Auth configures the Vault auth method used to log in. The block label
+// selects the method: auth "kubernetes" { ... } or auth "jwt" { ... }.
 type Auth struct {
-	Method    string `hcl:"method"`
+	Method    string `hcl:"method,label"`
 	Role      string `hcl:"role"`
 	MountPath string `hcl:"mount_path,optional"`
-	TokenFile string `hcl:"token_file,optional"`
+	TokenPath string `hcl:"token_path,optional"`
 }
 
-// Push configures the request that delivers the Vault token to the target API.
-// Templates are inline (HCL heredocs): Go templates interpolate with {{ }},
-// HCL with ${ }, so the two never collide.
-type Push struct {
-	URL             string            `hcl:"url"`
-	Method          string            `hcl:"method,optional"`
-	CACertFile      string            `hcl:"ca_cert_file,optional"`
-	BodyTemplate    string            `hcl:"body_template"`
-	CredentialsFile string            `hcl:"credentials_file,optional"`
-	Headers         map[string]string `hcl:"headers,optional"`
-	Extra           map[string]string `hcl:"extra,optional"`
-	Login           *Login            `hcl:"login,block"`
+// Credentials names the file whose flat JSON object backs the
+// {{ .Credentials.* }} template data, consumed by both target header
+// templates and the login body template.
+type Credentials struct {
+	File string `hcl:"file"`
+}
+
+// Target configures the request that delivers the Vault token to the target
+// API. Templates are inline (HCL heredocs): Go templates interpolate with
+// {{ }}, HCL with ${ }, so the two never collide.
+type Target struct {
+	URL          string            `hcl:"url"`
+	Method       string            `hcl:"method,optional"`
+	CACert       string            `hcl:"ca_cert,optional"`
+	BodyTemplate string            `hcl:"body_template"`
+	Headers      map[string]string `hcl:"headers,optional"`
+	Extra        map[string]string `hcl:"extra,optional"`
+	Login        *Login            `hcl:"login,block"`
 }
 
 // Login is an optional pre-login request that exchanges a credential for a
 // bearer token used on the push request (e.g. CP4D /icp4d-api/v1/authorize).
 type Login struct {
-	URL             string `hcl:"url"`
-	BodyTemplate    string `hcl:"body_template"`
-	TokenField      string `hcl:"token_field"`
-	CredentialsFile string `hcl:"credentials_file,optional"`
+	URL          string `hcl:"url"`
+	BodyTemplate string `hcl:"body_template"`
+	TokenField   string `hcl:"token_field"`
 }
 
 // Load reads, decodes, and validates the HCL config file at path.
@@ -90,29 +104,23 @@ func Load(path string) (*Config, error) {
 	switch cfg.Vault.Auth.Method {
 	case "kubernetes", "jwt":
 	default:
-		return nil, fmt.Errorf("vault.auth.method must be %q or %q, got %q", "kubernetes", "jwt", cfg.Vault.Auth.Method)
+		return nil, fmt.Errorf("vault.auth block label must be %q or %q, got %q", "kubernetes", "jwt", cfg.Vault.Auth.Method)
 	}
 	if cfg.Vault.Auth.MountPath == "" {
 		cfg.Vault.Auth.MountPath = cfg.Vault.Auth.Method
 	}
-	if cfg.Vault.Auth.TokenFile == "" {
-		cfg.Vault.Auth.TokenFile = defaultServiceAccountTokenFile
+	if cfg.Vault.Auth.TokenPath == "" {
+		cfg.Vault.Auth.TokenPath = defaultServiceAccountTokenPath
 	}
 
-	if cfg.Push.Method == "" {
-		cfg.Push.Method = "POST"
+	if cfg.Target.Method == "" {
+		cfg.Target.Method = "POST"
 	}
-	cfg.Push.Method = strings.ToUpper(cfg.Push.Method)
-
-	// One credentials file feeds both header and login templates; two
-	// locations for it would be ambiguous.
-	if cfg.Push.CredentialsFile != "" && cfg.Push.Login != nil && cfg.Push.Login.CredentialsFile != "" {
-		return nil, fmt.Errorf("set push.credentials_file or push.login.credentials_file, not both")
-	}
+	cfg.Target.Method = strings.ToUpper(cfg.Target.Method)
 
 	for name, raw := range map[string]string{
 		"vault.address": cfg.Vault.Address,
-		"push.url":      cfg.Push.URL,
+		"target.url":    cfg.Target.URL,
 	} {
 		u, err := url.Parse(raw)
 		if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
@@ -120,4 +128,13 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	return &cfg, nil
+}
+
+// CredentialsFile returns the configured credentials file path, or "" when
+// no credentials block is present.
+func (c *Config) CredentialsFile() string {
+	if c.Credentials == nil {
+		return ""
+	}
+	return c.Credentials.File
 }

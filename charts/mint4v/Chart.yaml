@@ -5,5 +5,5 @@ description: >-
   pushes them to a target API (e.g. Cloud Pak for Data), replacing long-lived
   static Vault tokens. Handles renewal, rotation, and revocation.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"

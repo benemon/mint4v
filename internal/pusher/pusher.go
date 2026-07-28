@@ -40,7 +40,7 @@ type loginData struct {
 // Pusher holds the parsed templates, credentials, and HTTP client for the
 // target API. Construct with New; safe to reuse across pushes.
 type Pusher struct {
-	cfg       config.Push
+	cfg       config.Target
 	client    *http.Client
 	bodyTmpl  *template.Template
 	loginTmpl *template.Template
@@ -49,29 +49,27 @@ type Pusher struct {
 	logger    *slog.Logger
 }
 
-// New parses the templates and credential file referenced by cfg and builds
-// the HTTP client, including the custom CA bundle if one is configured.
-func New(cfg config.Push, logger *slog.Logger) (*Pusher, error) {
+// New parses the templates and the credentials file and builds the HTTP
+// client, including the custom CA bundle if one is configured.
+// credentialsFile may be empty when no credentials block is configured.
+func New(cfg config.Target, credentialsFile string, logger *slog.Logger) (*Pusher, error) {
 	p := &Pusher{cfg: cfg, logger: logger}
 
 	var err error
-	p.bodyTmpl, err = parseTemplate("push.body_template", cfg.BodyTemplate)
+	p.bodyTmpl, err = parseTemplate("target.body_template", cfg.BodyTemplate)
 	if err != nil {
 		return nil, err
 	}
 
-	switch {
-	case cfg.CredentialsFile != "":
-		p.creds, err = loadCredentials("push.credentials_file", cfg.CredentialsFile)
-	case cfg.Login != nil && cfg.Login.CredentialsFile != "":
-		p.creds, err = loadCredentials("push.login.credentials_file", cfg.Login.CredentialsFile)
-	}
-	if err != nil {
-		return nil, err
+	if credentialsFile != "" {
+		p.creds, err = loadCredentials(credentialsFile)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if cfg.Login != nil {
-		p.loginTmpl, err = parseTemplate("push.login.body_template", cfg.Login.BodyTemplate)
+		p.loginTmpl, err = parseTemplate("target.login.body_template", cfg.Login.BodyTemplate)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +80,7 @@ func New(cfg config.Push, logger *slog.Logger) (*Pusher, error) {
 	// credentials file, never in the ConfigMap-resident config.
 	p.headers = make(map[string]string, len(cfg.Headers))
 	for k, v := range cfg.Headers {
-		tmpl, err := parseTemplate("push.headers."+k, v)
+		tmpl, err := parseTemplate("target.headers."+k, v)
 		if err != nil {
 			return nil, err
 		}
@@ -102,17 +100,17 @@ func New(cfg config.Push, logger *slog.Logger) (*Pusher, error) {
 			return fmt.Errorf("refusing redirect to %s", req.URL.Redacted())
 		},
 	}
-	if cfg.CACertFile != "" {
+	if cfg.CACert != "" {
 		pool, err := x509.SystemCertPool()
 		if err != nil {
 			return nil, fmt.Errorf("loading system cert pool: %w", err)
 		}
-		pem, err := os.ReadFile(cfg.CACertFile)
+		pem, err := os.ReadFile(cfg.CACert)
 		if err != nil {
-			return nil, fmt.Errorf("push.ca_cert_file: %w", err)
+			return nil, fmt.Errorf("target.ca_cert: %w", err)
 		}
 		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("push.ca_cert_file: no certificates found in %s", cfg.CACertFile)
+			return nil, fmt.Errorf("target.ca_cert: no certificates found in %s", cfg.CACert)
 		}
 		// Clone the default transport rather than replacing it: a bare
 		// &http.Transport{} would silently drop ProxyFromEnvironment and the
@@ -237,14 +235,14 @@ func lookupField(obj map[string]any, path string) (string, error) {
 	return s, nil
 }
 
-func loadCredentials(name, path string) (map[string]string, error) {
+func loadCredentials(path string) (map[string]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return nil, fmt.Errorf("credentials.file: %w", err)
 	}
 	var creds map[string]string
 	if err := json.Unmarshal(raw, &creds); err != nil {
-		return nil, fmt.Errorf("%s: parsing JSON: %w", name, err)
+		return nil, fmt.Errorf("credentials.file: parsing JSON: %w", err)
 	}
 	return creds, nil
 }

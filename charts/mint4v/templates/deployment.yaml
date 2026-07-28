@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "mint4v.labels" . | nindent 4 }}
 spec:
-  # Exactly one minter: a second replica would race pushes and revocations.
+  # Exactly one mint4v: a second replica would race pushes and revocations.
   # Recreate ensures the old pod revokes its token before the new one logs in.
   replicas: 1
   strategy:
@@ -30,10 +30,10 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: minter
+        - name: mint4v
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["-config", "/etc/minter/config.hcl"]
+          args: ["-config", "/etc/mint4v/config.hcl"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -61,24 +61,24 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: config
-              mountPath: /etc/minter
+              mountPath: /etc/mint4v
               readOnly: true
             - name: sa-token
-              mountPath: /var/run/secrets/minter
+              mountPath: /var/run/secrets/mint4v
               readOnly: true
             {{- if or .Values.credentialsSecret .Values.credentials }}
             - name: credentials
-              mountPath: /etc/minter/credentials
+              mountPath: /etc/mint4v/credentials
               readOnly: true
             {{- end }}
             {{- if or .Values.vaultCASecret .Values.vaultCA }}
             - name: vault-ca
-              mountPath: /etc/minter/tls/vault
+              mountPath: /etc/mint4v/tls/vault
               readOnly: true
             {{- end }}
             {{- if or .Values.targetCASecret .Values.targetCA }}
             - name: target-ca
-              mountPath: /etc/minter/tls/target
+              mountPath: /etc/mint4v/tls/target
               readOnly: true
             {{- end }}
       volumes:

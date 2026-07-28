@@ -3,7 +3,7 @@ IMG ?= mint4v:dev
 MOCK_IMG ?= mockcpd:e2e
 CONTAINER_TOOL ?= docker
 
-KIND_CLUSTER ?= vault-token-minter-e2e
+KIND_CLUSTER ?= mint4v-e2e
 
 .PHONY: all
 all: build
@@ -19,7 +19,7 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: build
-build: fmt vet ## Build the minter binary.
+build: fmt vet ## Build the mint4v binary.
 	go build -o bin/mint4v ./cmd
 
 .PHONY: test
@@ -44,11 +44,11 @@ helm-lint: ## Lint the Helm chart.
 ##@ Container images
 
 .PHONY: docker-build
-docker-build: ## Build the minter container image.
+docker-build: ## Build the mint4v container image.
 	$(CONTAINER_TOOL) build -t $(IMG) .
 
 .PHONY: docker-push
-docker-push: ## Push the minter container image.
+docker-push: ## Push the mint4v container image.
 	$(CONTAINER_TOOL) push $(IMG)
 
 .PHONY: docker-build-mock
@@ -113,7 +113,7 @@ E2E_IMG ?= image-registry.openshift-image-registry.svc:5000/$(E2E_NAMESPACE)/min
 E2E_MOCK_IMG ?= image-registry.openshift-image-registry.svc:5000/$(E2E_NAMESPACE)/mockcpd:latest
 
 .PHONY: ocp-build-e2e
-ocp-build-e2e: ## Build both e2e images in-cluster (minter + mock CP4D) into E2E_NAMESPACE.
+ocp-build-e2e: ## Build both e2e images in-cluster (mint4v + mock CP4D) into E2E_NAMESPACE.
 	$(MAKE) ocp-build NAMESPACE=$(E2E_NAMESPACE)
 	oc get bc mockcpd -n $(E2E_NAMESPACE) >/dev/null 2>&1 || { \
 		oc new-build --binary --strategy=docker --name=mockcpd -n $(E2E_NAMESPACE) && \

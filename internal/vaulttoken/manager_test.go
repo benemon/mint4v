@@ -154,7 +154,7 @@ func newTestManager(t *testing.T, fake *fakeVault, method string, push PushFunc)
 	if err := os.WriteFile(tokenFile, []byte("sa-jwt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	auth := config.Auth{Method: method, MountPath: method, Role: "cp4d", TokenFile: tokenFile}
+	auth := config.Auth{Method: method, MountPath: method, Role: "cp4d", TokenPath: tokenFile}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewManager(client, auth, 50*time.Millisecond, push, logger)
 }
@@ -362,7 +362,7 @@ func runAgainstCannedLogin(t *testing.T, loginBody string) ([]string, error) {
 	if err := os.WriteFile(tokenFile, []byte("sa-jwt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(client, config.Auth{Method: "jwt", MountPath: "jwt", Role: "r", TokenFile: tokenFile},
+	m := NewManager(client, config.Auth{Method: "jwt", MountPath: "jwt", Role: "r", TokenPath: tokenFile},
 		time.Second, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	err = m.Run(context.Background())
 	mu.Lock()
@@ -468,7 +468,7 @@ func TestRevokePreservesNamespaceHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := &pushRecorder{}
-	m := NewManager(client, config.Auth{Method: "jwt", MountPath: "jwt", Role: "cp4d", TokenFile: tokenFile},
+	m := NewManager(client, config.Auth{Method: "jwt", MountPath: "jwt", Role: "cp4d", TokenPath: tokenFile},
 		50*time.Millisecond, rec.push, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -4,21 +4,24 @@ health_address = ":9090"
 vault {
   address      = "https://vault.example.com:8200"
   namespace    = "admin/infra"
-  ca_cert_file = "/etc/minter/tls/vault-ca.pem"
+  ca_cert      = "/etc/mint4v/tls/vault-ca.pem"
   revoke_grace = "10s"
 
-  auth {
-    method     = "jwt"
+  auth "jwt" {
     mount_path = "jwt-ocp"
     role       = "cp4d"
-    token_file = "/var/run/secrets/minter/token"
+    token_path = "/var/run/secrets/mint4v/token"
   }
 }
 
-push {
-  url                = "https://cpd.example.com/zen-data/v2/vaults/1"
-  method             = "put"
-  ca_cert_file       = "/etc/minter/tls/target-ca.pem"
+credentials {
+  file = "/etc/mint4v/credentials/credentials.json"
+}
+
+target {
+  url           = "https://cpd.example.com/zen-data/v2/vaults/1"
+  method        = "put"
+  ca_cert       = "/etc/mint4v/tls/target-ca.pem"
   body_template = <<-EOT
     {"details":{"vault_address":"{{ .Extra.vault_id }}","access_token":"{{ .VaultToken }}"}}
   EOT
@@ -32,11 +35,10 @@ push {
   }
 
   login {
-    url                = "https://cpd.example.com/icp4d-api/v1/authorize"
+    url           = "https://cpd.example.com/icp4d-api/v1/authorize"
     body_template = <<-EOT
-      {"username":"{{ .Credentials.username }}"}
+      {"username":{{ toJSON .Credentials.username }}}
     EOT
-    token_field        = "token"
-    credentials_file   = "/etc/minter/credentials/credentials.json"
+    token_field   = "token"
   }
 }

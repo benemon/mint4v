@@ -6,16 +6,19 @@
 
 vault {
   address      = "https://vault.example.com:8200"
-  ca_cert_file = "/etc/minter/tls/vault/ca.crt"
+  ca_cert      = "/etc/mint4v/tls/vault/ca.crt"
   revoke_grace = "30s"
 
-  auth {
-    method = "kubernetes"
-    role   = "cp4d"
+  auth "kubernetes" {
+    role = "cp4d"
   }
 }
 
-push {
+credentials {
+  file = "/etc/mint4v/credentials/credentials.json"
+}
+
+target {
   url    = "https://cpd.example.com/zen-data/v2/vaults/1000330999:my-vault?validate_and_save=true"
   method = "PATCH"
 
@@ -38,7 +41,5 @@ push {
     body_template = <<-EOT
       {"username":{{ toJSON .Credentials.username }},"api_key":{{ toJSON .Credentials.api_key }}}
     EOT
-
-    credentials_file = "/etc/minter/credentials/credentials.json"
   }
 }

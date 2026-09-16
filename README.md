@@ -1,5 +1,9 @@
 [![CI](https://github.com/benemon/mint4v/actions/workflows/ci.yml/badge.svg)](https://github.com/benemon/mint4v/actions/workflows/ci.yml)
 [![E2E](https://github.com/benemon/mint4v/actions/workflows/e2e.yml/badge.svg)](https://github.com/benemon/mint4v/actions/workflows/e2e.yml)
+[![CodeQL](https://github.com/benemon/mint4v/actions/workflows/codeql.yml/badge.svg)](https://github.com/benemon/mint4v/actions/workflows/codeql.yml)
+[![Scorecard](https://github.com/benemon/mint4v/actions/workflows/scorecard.yml/badge.svg)](https://github.com/benemon/mint4v/actions/workflows/scorecard.yml)
+[![govulncheck](https://github.com/benemon/mint4v/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/benemon/mint4v/actions/workflows/govulncheck.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/benemon/mint4v/badge)](https://securityscorecards.dev/viewer/?uri=github.com/benemon/mint4v)
 
 # mint4v
 

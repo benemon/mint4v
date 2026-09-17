@@ -34,9 +34,14 @@ jobs:
     needs: [unit, e2e]
     permissions:
       contents: write
-      id-token: write     # keyless cosign signing
+      id-token: write       # keyless cosign signing + provenance
+      attestations: write   # build-provenance attestations
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history + tags so cyclonedx-gomod can derive the module
+          # version from the tag when generating the SBOM.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
@@ -51,6 +56,10 @@ jobs:
             tar -czf "dist/mint4v_${GITHUB_REF_NAME}_${platform%/*}_${platform#*/}.tar.gz" -C dist mint4v
             rm dist/mint4v
           done
+      - name: Generate SBOM
+        run: |
+          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.11.0 \
+            app -json -licenses -main cmd -output "dist/mint4v_${GITHUB_REF_NAME}.cdx.json" .
       - name: Package Helm chart
         run: |
           helm package charts/mint4v --destination dist \
@@ -64,6 +73,15 @@ jobs:
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
       - name: Sign checksums
         run: cosign sign-blob --yes --bundle dist/SHA256SUMS.cosign.bundle dist/SHA256SUMS
+      # Signed build provenance for the release binaries and chart, stored in
+      # the repository's attestation store. Verify with:
+      #   gh attestation verify <artifact> -R benemon/mint4v
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.tgz
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}

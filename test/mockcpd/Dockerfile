@@ -1,6 +1,6 @@
 # Mock CP4D API server for the e2e suite. Built from the repo root:
 #   docker build -f test/mockcpd/Dockerfile -t mockcpd:e2e .
-FROM golang:1.26@sha256:3c3e25a4da13fd0478eed2df1eb35a0e667094a7124d3993a6a1d30f71c17e79 AS builder
+FROM golang:1.27@sha256:f44f6e88636cfb311f9ebace870ded69d943f227bb3cb27d32ffd84ea18c43ea AS builder
 
 WORKDIR /workspace
 COPY go.mod go.sum ./

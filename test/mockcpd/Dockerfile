@@ -8,7 +8,7 @@ RUN go mod download
 COPY test/mockcpd/ test/mockcpd/
 RUN CGO_ENABLED=0 go build -trimpath -o mockcpd ./test/mockcpd
 
-FROM registry.access.redhat.com/ubi9/ubi-micro:9.8@sha256:7a0454cbd9bd847e8f6a63b6f0254a6efbeb6e0ed71a5d824a4f6cccbe626650
+FROM registry.access.redhat.com/ubi9/ubi-micro:9.8@sha256:5be877a2a280ae36eb9ab80ca4efb28bbf77c57abbba38137cdc37a03b8465e6
 COPY --from=builder /workspace/mockcpd /usr/local/bin/mockcpd
 USER 1001
 ENTRYPOINT ["/usr/local/bin/mockcpd"]
